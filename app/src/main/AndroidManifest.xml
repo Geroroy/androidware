@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="dev.androidware.app"
+    android:versionCode="1"
+    android:versionName="0.0.1-m0">
+
+    <uses-sdk android:minSdkVersion="29" android:targetSdkVersion="35" />
+
+    <!-- Foreground service keeps the guest alive while the activity is backgrounded. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Guest networking is OFF by default; INTERNET is declared so the user can opt in later. -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <application
+        android:label="@string/app_name"
+        android:icon="@drawable/ic_launcher"
+        android:allowBackup="false"
+        android:extractNativeLibs="true"
+        android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:configChanges="orientation|screenSize|keyboardHidden"
+            android:screenOrientation="sensorLandscape">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <service
+            android:name=".EngineService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Runs a QEMU guest machine selected by the user" />
+        </service>
+    </application>
+</manifest>

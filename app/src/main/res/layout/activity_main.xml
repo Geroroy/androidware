@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="horizontal"
+    android:background="#000000">
+
+    <!-- Guest display (VNC framebuffer). Touch events become guest pointer events. -->
+    <dev.androidware.app.VncView
+        android:id="@+id/vnc"
+        android:layout_width="0dp"
+        android:layout_height="match_parent"
+        android:layout_weight="3" />
+
+    <LinearLayout
+        android:layout_width="0dp"
+        android:layout_height="match_parent"
+        android:layout_weight="2"
+        android:orientation="vertical"
+        android:padding="6dp"
+        android:background="#202020">
+
+        <HorizontalScrollView android:layout_width="match_parent" android:layout_height="wrap_content">
+            <LinearLayout android:layout_width="wrap_content" android:layout_height="wrap_content" android:orientation="horizontal">
+                <Button android:id="@+id/btn_host" android:text="@string/btn_host_info" android:layout_width="wrap_content" android:layout_height="wrap_content" />
+                <Button android:id="@+id/btn_kernel" android:text="@string/btn_import_kernel" android:layout_width="wrap_content" android:layout_height="wrap_content" />
+                <Button android:id="@+id/btn_initrd" android:text="@string/btn_import_initrd" android:layout_width="wrap_content" android:layout_height="wrap_content" />
+                <Button android:id="@+id/btn_disk" android:text="@string/btn_import_disk" android:layout_width="wrap_content" android:layout_height="wrap_content" />
+                <Button android:id="@+id/btn_apk" android:text="@string/btn_inspect_apk" android:layout_width="wrap_content" android:layout_height="wrap_content" />
+                <Button android:id="@+id/btn_start" android:text="@string/btn_start" android:layout_width="wrap_content" android:layout_height="wrap_content" />
+                <Button android:id="@+id/btn_stop" android:text="@string/btn_stop" android:layout_width="wrap_content" android:layout_height="wrap_content" />
+                <Button android:id="@+id/btn_export" android:text="@string/btn_export_log" android:layout_width="wrap_content" android:layout_height="wrap_content" />
+            </LinearLayout>
+        </HorizontalScrollView>
+
+        <ScrollView android:id="@+id/log_scroll" android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1">
+            <TextView android:id="@+id/log" android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:typeface="monospace" android:textSize="10sp" android:textColor="#C0FFC0" android:textIsSelectable="true" />
+        </ScrollView>
+    </LinearLayout>
+</LinearLayout>

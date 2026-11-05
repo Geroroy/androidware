@@ -1,0 +1,25 @@
+[binaries]
+c = '@TOOLCHAIN@/bin/aarch64-linux-android28-clang'
+cpp = '@TOOLCHAIN@/bin/aarch64-linux-android28-clang++'
+ar = '@TOOLCHAIN@/bin/llvm-ar'
+strip = '@TOOLCHAIN@/bin/llvm-strip'
+ranlib = '@TOOLCHAIN@/bin/llvm-ranlib'
+nm = '@TOOLCHAIN@/bin/llvm-nm'
+objcopy = '@TOOLCHAIN@/bin/llvm-objcopy'
+pkg-config = '/usr/bin/pkg-config'
+
+[built-in options]
+c_args = ['-fPIC', '-O2', '-I@PREFIX@/include']
+cpp_args = ['-fPIC', '-O2', '-I@PREFIX@/include']
+c_link_args = ['-Wl,-z,max-page-size=16384', '-L@PREFIX@/lib']
+cpp_link_args = ['-Wl,-z,max-page-size=16384', '-L@PREFIX@/lib']
+
+[properties]
+pkg_config_libdir = '@PREFIX@/lib/pkgconfig'
+needs_exe_wrapper = true
+
+[host_machine]
+system = 'android'
+cpu_family = 'aarch64'
+cpu = 'aarch64'
+endian = 'little'

@@ -1,0 +1,10 @@
+# build outputs
+app/build/
+app/jniLibs/
+app/src/main/assets/qemu-share/
+engine/src/
+engine/work/
+experiments/pc-tcg-aarch32/work/
+dist/test-guest/
+.debug.keystore
+*.log

@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Androidware</string>
+    <string name="btn_host_info">Host check</string>
+    <string name="btn_import_kernel">Import kernel</string>
+    <string name="btn_import_initrd">Import initrd</string>
+    <string name="btn_import_disk">Import disk image</string>
+    <string name="btn_inspect_apk">Inspect game APK</string>
+    <string name="btn_start">Start guest</string>
+    <string name="btn_stop">Stop guest</string>
+    <string name="btn_export_log">Export log</string>
+    <string name="notif_channel">Guest machine</string>
+    <string name="notif_running">Guest machine is running</string>
+</resources>
