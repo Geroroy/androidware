@@ -23,6 +23,7 @@
         <HorizontalScrollView android:layout_width="match_parent" android:layout_height="wrap_content">
             <LinearLayout android:layout_width="wrap_content" android:layout_height="wrap_content" android:orientation="horizontal">
                 <Button android:id="@+id/btn_host" android:text="@string/btn_host_info" android:layout_width="wrap_content" android:layout_height="wrap_content" />
+                <Button android:id="@+id/btn_selftest" android:text="@string/btn_selftest" android:layout_width="wrap_content" android:layout_height="wrap_content" />
                 <Button android:id="@+id/btn_kernel" android:text="@string/btn_import_kernel" android:layout_width="wrap_content" android:layout_height="wrap_content" />
                 <Button android:id="@+id/btn_initrd" android:text="@string/btn_import_initrd" android:layout_width="wrap_content" android:layout_height="wrap_content" />
                 <Button android:id="@+id/btn_disk" android:text="@string/btn_import_disk" android:layout_width="wrap_content" android:layout_height="wrap_content" />

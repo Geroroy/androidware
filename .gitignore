@@ -1,7 +1,7 @@
 # build outputs
 app/build/
 app/jniLibs/
-app/src/main/assets/qemu-share/
+app/src/main/assets/qemu-share/keymaps/
 engine/src/
 engine/work/
 experiments/pc-tcg-aarch32/work/

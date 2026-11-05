@@ -16,6 +16,8 @@ import java.util.List;
  */
 public final class QemuLauncher {
     public static final String QEMU_BINARY = "libqemu-system-aarch64.so";
+    /** QEMU user-mode emulator for 32-bit ARM Linux/bionic processes (approach D engine, also the on-device TCG benchmark). */
+    public static final String QEMU_ARM_USER_BINARY = "libqemu-arm.so";
 
     private QemuLauncher() {}
 

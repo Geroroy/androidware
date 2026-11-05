@@ -69,6 +69,17 @@ meson setup build-android --cross-file "$CROSS" --prefix "$PREFIX" --default-lib
   -Ddocumentation=false -Dsysprof=disabled -Dlibelf=disabled -Dnls=disabled -Dglib_debug=disabled
 ninja -C build-android install
 
+step "libslirp 4.7.0 (static; guest user-mode networking, OFF by default in the app)"
+cd "$SRC/libslirp-v4.7.0" && rm -rf build-android
+meson setup build-android --cross-file "$CROSS" --prefix "$PREFIX" --default-library static --buildtype release
+ninja -C build-android install
+
+step "libandroid-shmem (System V shm emulation needed by qemu-arm linux-user; BSD-3)"
+cd "$SRC/libandroid-shmem"
+"$TC/bin/aarch64-linux-android${API}-clang" -O2 -fPIC -std=c11 -D_PATH_TMP='"/data/local/tmp/"' -c shmem.c -o shmem.o
+"$TC/bin/llvm-ar" rcs "$PREFIX/lib/libandroid-shmem.a" shmem.o
+mkdir -p "$PREFIX/include/sys" && cp shm.h "$PREFIX/include/sys/shm.h"
+
 step "QEMU v11.1.3 with Termux Android patches"
 cd "$SRC/qemu"
 if [ ! -f .androidware-patched ]; then
@@ -85,7 +96,7 @@ rm -rf build && mkdir build && cd build
   --target-list=aarch64-softmmu --enable-tcg --disable-kvm --disable-xen --disable-docs --disable-werror \
   --enable-vnc --disable-vnc-sasl --disable-vnc-jpeg --disable-png --disable-sdl --disable-gtk --disable-opengl --disable-virglrenderer \
   --disable-gnutls --disable-nettle --disable-gcrypt --disable-libssh --disable-curl --disable-guest-agent --disable-tools \
-  --enable-fdt=internal --disable-slirp --disable-vhost-user --disable-vhost-net --disable-vhost-kernel --disable-vhost-vdpa \
+  --enable-fdt=internal --enable-slirp --disable-vhost-user --disable-vhost-net --disable-vhost-kernel --disable-vhost-vdpa \
   --disable-linux-aio --disable-linux-io-uring --disable-seccomp --disable-libudev --disable-selinux --disable-virtfs --disable-spice \
   --disable-usb-redir --disable-libusb --disable-attr --disable-cap-ng --disable-numa --disable-rbd --disable-smartcard \
   --disable-lzo --disable-snappy --disable-bzip2 --disable-zstd --disable-brlapi --disable-plugins --disable-debug-info --disable-rust \
@@ -95,11 +106,23 @@ rm -rf build && mkdir build && cd build
   --extra-cflags="-O2 -fPIC -I$PREFIX/include" --extra-ldflags="-L$PREFIX/lib -llog -Wl,-z,max-page-size=16384"
 ninja -j"$JOBS" qemu-system-aarch64
 
+step "QEMU arm-linux-user (qemu-arm): approach-D engine and on-device TCG benchmark"
+cd "$SRC/qemu" && rm -rf build-user && mkdir build-user && cd build-user
+../configure --cross-prefix=aarch64-linux-android- --host-cc=gcc --cpu=aarch64 --prefix=/data/local/tmp/androidware/usr \
+  --target-list=arm-linux-user --enable-tcg --disable-system --disable-docs --disable-werror --disable-tools --disable-guest-agent \
+  --disable-plugins --disable-debug-info --disable-rust --disable-strip \
+  --extra-cflags="-O2 -fPIC -I$PREFIX/include" --extra-ldflags="-L$PREFIX/lib -landroid-shmem -landroid -llog -Wl,-z,max-page-size=16384"
+ninja -j"$JOBS" qemu-arm
+
 step "install into app"
 OUTLIB="$ROOT/app/jniLibs/arm64-v8a"; mkdir -p "$OUTLIB"
-"$TC/bin/llvm-strip" -o "$OUTLIB/libqemu-system-aarch64.so" qemu-system-aarch64
-file "$OUTLIB/libqemu-system-aarch64.so"
-ASSETS="$ROOT/app/src/main/assets/qemu-share"; rm -rf "$ASSETS"; mkdir -p "$ASSETS/keymaps"
-cp pc-bios/keymaps/* "$ASSETS/keymaps/" 2>/dev/null || cp -r "$SRC/qemu/build/pc-bios/keymaps/." "$ASSETS/keymaps/"
-ls -la "$OUTLIB" "$ASSETS/keymaps" | head
+"$TC/bin/llvm-strip" -o "$OUTLIB/libqemu-system-aarch64.so" "$SRC/qemu/build/qemu-system-aarch64"
+"$TC/bin/llvm-strip" -o "$OUTLIB/libqemu-arm.so" "$SRC/qemu/build-user/qemu-arm"
+file "$OUTLIB"/*.so
+SELF="$ROOT/app/src/main/assets/selftest"; mkdir -p "$SELF"
+"$TC/bin/armv7a-linux-androideabi${API}-clang" -O2 -static -o "$SELF/bench-arm32-bionic" "$ROOT/experiments/pc-tcg-aarch32/bench.c" -lm
+"$TC/bin/aarch64-linux-android${API}-clang" -O2 -static -o "$SELF/bench-arm64-bionic" "$ROOT/experiments/pc-tcg-aarch32/bench.c" -lm
+"$TC/bin/llvm-strip" "$SELF"/bench-*
+# No data files are required for the headless+VNC configuration (VNC keeps its keysym tables built in).
+ls -la "$OUTLIB"
 echo "engine build complete"

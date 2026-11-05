@@ -20,7 +20,8 @@ public final class QemuAssets {
         catch (android.content.pm.PackageManager.NameNotFoundException e) { ver = 0; }
         File stamp = new File(root, ".stamp-" + ver);
         if (stamp.exists()) return;
-        copyDir(ctx.getAssets(), "qemu-share", root);
+        String[] top = ctx.getAssets().list("qemu-share");
+        if (top != null && top.length > 0) copyDir(ctx.getAssets(), "qemu-share", root);
         //noinspection ResultOfMethodCallIgnored
         stamp.createNewFile();
     }

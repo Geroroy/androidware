@@ -60,7 +60,7 @@ if [ -d "$APP/src/main/assets" ]; then
   pushd "$APP/src/main" >/dev/null; zip -q -r "$OUT/apk/unaligned.apk" assets; popd >/dev/null
 fi
 echo "[6/6] zipalign + sign"
-"$BUILD_TOOLS/zipalign" -p -f 4 "$OUT/apk/unaligned.apk" "$OUT/apk/aligned.apk"
+"$BUILD_TOOLS/zipalign" -P 16 -f 4 "$OUT/apk/unaligned.apk" "$OUT/apk/aligned.apk"
 KS="$ROOT/.debug.keystore"
 if [ ! -f "$KS" ]; then
   keytool -genkeypair -keystore "$KS" -storepass android -keypass android -alias androiddebugkey \

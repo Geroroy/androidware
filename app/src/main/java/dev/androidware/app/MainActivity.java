@@ -66,6 +66,7 @@ public class MainActivity extends Activity implements EngineService.LogListener,
         profile = GuestProfile.load(getFilesDir(), "default");
 
         ((Button) findViewById(R.id.btn_host)).setOnClickListener(v -> log(HostInfo.collect(this)));
+        ((Button) findViewById(R.id.btn_selftest)).setOnClickListener(v -> io.execute(() -> log(SelfTest.run(this))));
         ((Button) findViewById(R.id.btn_kernel)).setOnClickListener(v -> pick(REQ_KERNEL));
         ((Button) findViewById(R.id.btn_initrd)).setOnClickListener(v -> pick(REQ_INITRD));
         ((Button) findViewById(R.id.btn_disk)).setOnClickListener(v -> pick(REQ_DISK));

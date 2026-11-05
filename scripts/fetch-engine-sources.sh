@@ -11,9 +11,10 @@ fetch_rev keycodemapdb f5772a62ec52591ff6870b7e8ef32482371f22c6
 fetch_rev berkeley-softfloat-3 b64af41c3276f97f0e181920400ee056b9c88037
 fetch_rev berkeley-testfloat-3 e7af9751d9f9fd3b47911f51a5cfd08af256a9ab
 [ -d proxy-libintl ] || git clone --depth 1 --branch 0.4 https://github.com/frida/proxy-libintl.git
+[ -d libandroid-shmem ] || git clone --depth 1 https://github.com/termux/libandroid-shmem.git
 # Ubuntu noble source tarballs (apt-get source needs deb-src enabled); alternatively download the .orig tarballs manually.
 mkdir -p debsrc && cd debsrc
-apt-get source --download-only pixman glib2.0 libffi pcre2 || echo "apt-get source failed; place pixman_0.42.2.orig.tar.gz, glib2.0_2.80.0.orig.tar.xz, libffi_3.4.6.orig.tar.gz, pcre2_10.42.orig.tar.gz here"
+apt-get source --download-only pixman glib2.0 libffi pcre2 libslirp || echo "apt-get source failed; place pixman_0.42.2.orig.tar.gz, glib2.0_2.80.0.orig.tar.xz, libffi_3.4.6.orig.tar.gz, pcre2_10.42.orig.tar.gz here"
 cd ..
-for t in debsrc/pixman_0.42.2.orig.tar.gz debsrc/glib2.0_2.80.0.orig.tar.xz debsrc/libffi_3.4.6.orig.tar.gz debsrc/pcre2_10.42.orig.tar.gz; do tar xf "$t"; done
+for t in debsrc/pixman_0.42.2.orig.tar.gz debsrc/glib2.0_2.80.0.orig.tar.xz debsrc/libffi_3.4.6.orig.tar.gz debsrc/pcre2_10.42.orig.tar.gz debsrc/libslirp_4.7.0.orig.tar.bz2; do tar xf "$t"; done
 ls

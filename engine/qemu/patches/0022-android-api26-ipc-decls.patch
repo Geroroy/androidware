@@ -1,0 +1,36 @@
+--- a/linux-user/syscall.c
++++ b/linux-user/syscall.c
+@@ -308,6 +308,8 @@
+ #endif
+ 
+ _syscall0(int, vhangup)
++/* bionic declares msgctl/msgget/setdomainname from API 26 (Termux builds for API 24); semget stays: <linux/sem.h> has no prototype. */
++#if !defined(__ANDROID_API__) || __ANDROID_API__ < 26
+ #ifdef __NR_msgctl
+ _syscall3(int, msgctl, int, msqid, int, cmd, struct msqid_ds *, buf)
+ #else
+@@ -318,6 +320,7 @@
+ }
+ #endif
+ 
++#endif /* __ANDROID_API__ < 26 */
+ #ifdef __NR_semget
+ _syscall3(int, semget, key_t, key, int, nsems, int, semflg)
+ #else
+@@ -328,6 +331,7 @@
+ }
+ #endif
+ 
++#if !defined(__ANDROID_API__) || __ANDROID_API__ < 26
+ _syscall2(int, setdomainname, const char *, name, size_t, len)
+ #ifdef __NR_msgget
+ _syscall2(int, msgget, key_t, key, int, msgflg)
+@@ -339,6 +343,8 @@
+ }
+ #endif
+ 
++#endif /* __ANDROID_API__ < 26 */
++
+ #ifdef _NSIG_WORDS
+ static int sigorset(sigset_t *dest, const sigset_t *a, const sigset_t *b)
+ {
