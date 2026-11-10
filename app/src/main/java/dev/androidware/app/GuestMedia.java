@@ -68,7 +68,7 @@ public final class GuestMedia {
      * console, where the app shows them and "Export log" includes them. The guest has no adb.
      */
     static final String CRASHLOG_SCRIPT = "#!/system/bin/sh\n"
-            + "logcat -b crash -b main -v brief AndroidRuntime:E DEBUG:I libEGL:W linker:W '*:S' | while read -r l; do\n"
+            + "logcat -b crash -b main -v brief AndroidRuntime:E DEBUG:I libEGL:W EGL_emulation:E chromium:F linker:W '*:S' | while read -r l; do\n"
             + "  echo \"awcrash: $l\" > /dev/kmsg\n"
             + "done\n";
 

@@ -72,7 +72,16 @@ Apply with: patch -d src -p1 < this-file
      gles1Extensions = NULL;
 --- a/host/libs/libOpenglRender/RenderControl.cpp
 +++ b/host/libs/libOpenglRender/RenderControl.cpp
-@@ -25,6 +25,10 @@
+@@ -15,6 +15,8 @@
+ */
+ #include "RenderControl.h"
+ 
++#include <stdlib.h>
++
+ #include "DispatchTables.h"
+ #include "FbConfig.h"
+ #include "FrameBuffer.h"
+@@ -25,6 +27,10 @@
  
  static const GLint rendererVersion = 1;
  
@@ -83,7 +92,25 @@ Apply with: patch -d src -p1 < this-file
  static GLint rcGetRendererVersion()
  {
      return rendererVersion;
-@@ -75,6 +79,10 @@
+@@ -53,6 +59,17 @@
+     if (!str) {
+         return 0;
+     }
++    // awgl: the guest EGL appends this string to its own extension list. With
++    // the Translator the host answered with the short list below; a real
++    // driver lists extensions the guest EGL does not implement (for example
++    // EGL_EXT_create_context_robustness: Chromium/WebView then passes
++    // EGL_LOSE_CONTEXT_ON_RESET_STRATEGY_EXT to eglCreateContext, the guest
++    // rejects it with EGL_BAD_ATTRIBUTE and every app using a WebView aborts).
++    if (name == EGL_EXTENSIONS && !getenv("AWGL_RAW_GL_STRINGS")) {
++        str = "EGL_KHR_image_base EGL_KHR_gl_texture_2D_image";
++    } else if (name == EGL_VERSION && !getenv("AWGL_RAW_GL_STRINGS")) {
++        str = "1.4";
++    }
+ 
+     int len = strlen(str) + 1;
+     if (!buffer || len > bufferSize) {
+@@ -75,6 +92,10 @@
          else {
              str = (const char *)s_gles1.glGetString(name);
          }

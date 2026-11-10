@@ -13,7 +13,16 @@
 - Start Android 때 `graphics:` 모드 표시, 가져온 APK의 매니페스트가 GLES 2.0 이상을 요구하는데 Software 모드면 경고.
 - PC 검증(Software 모드, 앱과 같은 `GuestMedia` 코드): 설치 진행 줄 표시, GLES 2.0 테스트 앱에서 `E/libEGL: called unimplemented OpenGL ES API` 수집, 실행 중인 테스트 앱에 SIGSEGV를 보내 tombstone(backtrace 30프레임) 전체가 시리얼 로그에 기록됨. 앱 쪽 화면 표시(파일 tail)와 GLES 경고는 기기에서만 확인 가능(미검증).
 
-다음: 사용자가 0.0.10-m1로 다시 실행 → `graphics:` 줄과 `[guest] awcrash:` 내용으로 원인 확정.
+### 기기 실측 7차 (0.0.10-m1, Export log) — 원인 확정, 0.0.11-m1에서 수정
+
+- 기기 사실: **Host GPU 모드가 기기에서 동작**(렌더러 `Qualcomm / Adreno (TM) 830 / OpenGL ES 3.2`, 720x1280, 게스트 홈 화면까지 부팅). 설치된 게임은 `com.gameloft.android.ANMP.GloftNAHM`(Freedom Edition)과 검은방 1. 크래시 로그 수집 기능도 기기에서 동작.
+- 크래시: 게임 프로세스 안의 WebView(Chromium 51)가 `[FATAL:gpu_info_collector_android.cc(183)] failed to create a temporary context … EGL_BAD_ATTRIBUTE`로 abort. 게스트의 `org.chromium.webview_shell`도 같은 메시지로 종료 → 게임 고유 문제가 아님.
+- 원인: `rcQueryEGLString(EGL_EXTENSIONS)`가 호스트 드라이버의 확장 목록을 그대로 돌려줌 → 게스트 EGL이 `EGL_EXT_create_context_robustness`를 광고 → Chromium이 `eglCreateContext`에 robustness 속성을 넘김 → 게스트 `libEGL_emulation`이 모르는 속성이라 `EGL_BAD_ATTRIBUTE`. (원래 에뮬레이터의 Translator는 `EGL_KHR_image_base EGL_KHR_gl_texture_2D_image`만 알렸다.)
+- 수정: `engine/emugl` 패치에서 EGL 확장 문자열을 Translator와 같은 목록으로, 버전을 1.4로 고정.
+- PC 검증(llvmpipe): 수정 전 `webview_shell` 실행 → 같은 FATAL로 종료(재현 2회). 수정 후 → Activity 표시, 프로세스 생존. N.O.V.A. 3 자체는 APK가 없어 PC에서 실행하지 못했다. **기기 재확인 대기.**
+- 크래시 로그 필터에 `EGL_emulation:E chromium:F` 추가.
+
+(이전 계획) 사용자가 0.0.10-m1로 다시 실행 → `graphics:` 줄과 `[guest] awcrash:` 내용으로 원인 확정.
 
 ## 세션 4 요약 (2026-11-10) — 호스트 GPU GLES 2.0 경로 (앱 0.0.9-m1, 실험적)
 
