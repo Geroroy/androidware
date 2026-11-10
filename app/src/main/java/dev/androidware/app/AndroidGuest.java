@@ -89,9 +89,26 @@ public final class AndroidGuest {
             boolean l = pkg.equals(launch);
             apks.add(new GuestMedia.Apk(f, pkg, l));
             sb.append(pkg).append(l ? " (auto-start)" : "").append(' ');
+            int gl = requiredGles(ctx, f);
+            if (gl >= 0x20000 && !hostGpu(ctx)) {
+                sb.append("\n  WARNING: ").append(pkg).append(" requires OpenGL ES ").append(gl >> 16).append('.').append(gl & 0xffff)
+                  .append(" but Graphics is Software (GLES 1.x only): it will stop at startup."
+                        + " Switch \"Android 7 guest…\" -> Graphics to Host GPU.\n");
+            }
         }
         GuestMedia.writeTransferDisk(new File(d, "transfer.img"), apks);
         return apks.isEmpty() ? "no game APK imported" : sb.toString().trim();
+    }
+
+    /** OpenGL ES version the APK's manifest requires (0x00020000 = 2.0), or 0 if it does not say. */
+    static int requiredGles(Context ctx, File apk) {
+        android.content.pm.PackageInfo pi = ctx.getPackageManager().getPackageArchiveInfo(apk.getAbsolutePath(),
+                android.content.pm.PackageManager.GET_CONFIGURATIONS);
+        int v = 0;
+        if (pi != null && pi.reqFeatures != null) {
+            for (android.content.pm.FeatureInfo f : pi.reqFeatures) if (f.name == null) v = Math.max(v, f.reqGlEsVersion);
+        }
+        return v;
     }
 
     /** Downloads the official zip from dl.google.com, verifying size and SHA-1, then installs it. */

@@ -62,6 +62,16 @@ public final class GuestMedia {
             + "done\n"
             + "say 'install script done'\n";
 
+    /**
+     * Runs in the guest as root: copies app crashes (Java "FATAL EXCEPTION" traces and native
+     * tombstones from the crash buffer, plus linker/EGL warnings) to the kernel log, i.e. the serial
+     * console, where the app shows them and "Export log" includes them. The guest has no adb.
+     */
+    static final String CRASHLOG_SCRIPT = "#!/system/bin/sh\n"
+            + "logcat -b crash -b main -v brief AndroidRuntime:E DEBUG:I libEGL:W linker:W '*:S' | while read -r l; do\n"
+            + "  echo \"awcrash: $l\" > /dev/kmsg\n"
+            + "done\n";
+
     static final String RC_ADDITION = "\n# --- androidware ---\n"
             + "service aw-install /system/bin/sh /aw-install.sh\n"
             + "    user root\n"
@@ -70,7 +80,14 @@ public final class GuestMedia {
             + "    disabled\n"
             + "    oneshot\n"
             + "\n"
+            + "service aw-crashlog /system/bin/sh /aw-crashlog.sh\n"
+            + "    user root\n"
+            + "    group root\n"
+            + "    seclabel u:r:su:s0\n"
+            + "    disabled\n"
+            + "\n"
             + "on property:sys.boot_completed=1\n"
+            + "    start aw-crashlog\n"
             + "    start aw-install\n";
 
     /**
@@ -90,6 +107,7 @@ public final class GuestMedia {
             cpioAdd(cpio, "default.prop", 0100644, (new String(dp, StandardCharsets.UTF_8) + "\nro.opengles.version=131072\nro.sf.lcd_density=" + dpi + "\n").getBytes(StandardCharsets.UTF_8));
         }
         cpioAdd(cpio, "aw-install.sh", 0100750, INSTALL_SCRIPT.getBytes(StandardCharsets.UTF_8));
+        cpioAdd(cpio, "aw-crashlog.sh", 0100750, CRASHLOG_SCRIPT.getBytes(StandardCharsets.UTF_8));
         cpioAdd(cpio, "TRAILER!!!", 0, new byte[0]);
         try (OutputStream o = new FileOutputStream(out)) {
             o.write(orig);

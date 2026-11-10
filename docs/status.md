@@ -1,6 +1,19 @@
 # 진행 상태와 다음 단계
 
-최종 갱신: 2026-11-10 (세션 4). 세션 2, 세션 1 기록은 아래에 그대로 둔다.
+최종 갱신: 2026-11-10 (세션 5). 세션 2, 세션 1 기록은 아래에 그대로 둔다.
+
+## 세션 5 (2026-11-10) — 기기에서 N.O.V.A. 3 "has stopped", 크래시 로그 수집 추가 (앱 0.0.10-m1)
+
+기기 실측 6차(사용자 스크린샷): N.O.V.A. 3 APK가 게스트에 **설치되고 자동 시작**되었으나 곧 "N.O.V.A 3 has stopped" 대화상자가 떴다. 그래픽 모드(Software/Host GPU), 데이터(OBB) 유무, 크래시 원인은 **미확인** — 게스트에 adb가 없어 logcat이 앱 밖으로 나오지 않았다.
+
+가능한 원인(추정, 우선순위 순): (1) Graphics가 기본값 Software(GLES 1.x 전용)인 상태 — GLES 2.0 게임은 시작 시 종료된다, (2) Host GPU 모드의 기기 쪽 렌더러 문제(기기 미검증 경로), (3) 게임 쪽 문제(추가 데이터 없음, 기기 ID null, Android 7 비호환 등).
+
+추가한 것:
+- 게스트 `aw-crashlog` 서비스(램디스크 오버레이): `logcat -b crash -b main AndroidRuntime:E DEBUG:I libEGL:W linker:W`를 커널 로그(시리얼 콘솔)로 복사. 앱이 `serial.log`를 따라가며 `androidware:`/`awcrash:` 줄을 로그 화면에 `[guest] …`로 표시, Export log에 포함.
+- Start Android 때 `graphics:` 모드 표시, 가져온 APK의 매니페스트가 GLES 2.0 이상을 요구하는데 Software 모드면 경고.
+- PC 검증(Software 모드, 앱과 같은 `GuestMedia` 코드): 설치 진행 줄 표시, GLES 2.0 테스트 앱에서 `E/libEGL: called unimplemented OpenGL ES API` 수집, 실행 중인 테스트 앱에 SIGSEGV를 보내 tombstone(backtrace 30프레임) 전체가 시리얼 로그에 기록됨. 앱 쪽 화면 표시(파일 tail)와 GLES 경고는 기기에서만 확인 가능(미검증).
+
+다음: 사용자가 0.0.10-m1로 다시 실행 → `graphics:` 줄과 `[guest] awcrash:` 내용으로 원인 확정.
 
 ## 세션 4 요약 (2026-11-10) — 호스트 GPU GLES 2.0 경로 (앱 0.0.9-m1, 실험적)
 

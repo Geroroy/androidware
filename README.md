@@ -9,6 +9,7 @@
 - 앱: "Android 7 guest…"(공식 이미지 다운로드/가져오기) + "Start Android".
 - (세션 3) 앱 0.0.7-m1: **Import game APK** → **Start Android**만으로 게임이 게스트에 설치·실행된다(PC 불필요). 오디오(goldfish-audio → 앱 AudioTrack), SD 카드 추가, 간헐적 엔진 크래시 수정. PC 검증만 했고 기기·실제 게임은 미검증.
 - (세션 4) 앱 0.0.9-m1: 호스트 GPU 그래픽 모드(GLES 2.0, 실험적) 추가 — 엔진 goldfish-pipe + `engine/emugl` 렌더러. PC에서 GLES 2.0 테스트 앱 실행 확인, 기기 미검증.
+- (세션 5) 앱 0.0.10-m1: 기기에서 N.O.V.A. 3이 게스트 안에서 "has stopped"로 종료(사용자 스크린샷, 그래픽 모드·원인 미확인). 원인 확인용으로 게스트 크래시 로그를 앱 로그/Export log로 내보내는 기능과 GLES 2.0 게임 + Software 그래픽 경고 추가.
 - 남은 핵심 과제: 기기에서 GPU 모드 확인, 실제 게임(검은방, N.O.V.A. 3) 실행 확인.
 
 ## 한 줄 결론 (2026-11-05)

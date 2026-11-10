@@ -98,7 +98,7 @@ public class MainActivity extends Activity implements EngineService.LogListener,
             startActivityForResult(i, REQ_EXPORT);
         });
 
-        log("androidware 0.0.9-m1; profile=" + profile.name + " kernel=" + profile.kernel + " initrd=" + profile.initrd + " disk=" + profile.disk);
+        log("androidware 0.0.10-m1; profile=" + profile.name + " kernel=" + profile.kernel + " initrd=" + profile.initrd + " disk=" + profile.disk);
         Intent svc = new Intent(this, EngineService.class);
         bindService(svc, conn, Context.BIND_AUTO_CREATE);
     }
@@ -272,6 +272,8 @@ public class MainActivity extends Activity implements EngineService.LogListener,
                 startForegroundService(new Intent(this, EngineService.class));
                 log("guest games: " + AndroidGuest.prepareBoot(this));
                 GuestProfile prof = AndroidGuest.profile(this);
+                log("graphics: " + (prof.glSocket != null ? "Host GPU (GLES 1.x + 2.0)" : "Software (GLES 1.x only)")
+                        + ", " + prof.displayWidth + "x" + prof.displayHeight);
                 if (prof.glSocket != null) {
                     String err = GlRenderer.start(new File(prof.glSocket), prof.displayWidth, prof.displayHeight);
                     if (err != null) { log("host GPU renderer: " + err + " -> switch Graphics to Software in \"Android 7 guest…\""); return; }
@@ -282,10 +284,45 @@ public class MainActivity extends Activity implements EngineService.LogListener,
                     ui.post(() -> showGlSurface(false));
                 }
                 service.start(prof);
+                followSerial();
                 audio.start(QemuLauncher.audioSocket(this));
                 ui.post(() -> vnc.connect(QemuLauncher.vncSocket(this)));
             } catch (IOException e) { log("start failed: " + e); }
         });
+    }
+
+    /**
+     * Shows the guest's install progress ("androidware: ...") and app crashes ("awcrash: ...", written
+     * by /aw-crashlog.sh) on the on-screen log while the guest runs. Source: the serial console file.
+     */
+    private void followSerial() {
+        final File serial = QemuLauncher.serialLog(this);
+        Thread t = new Thread(() -> {
+            long pos = 0;
+            StringBuilder line = new StringBuilder();
+            try { Thread.sleep(1500); } catch (InterruptedException e) { return; }
+            while (service != null && service.isRunning()) {
+                try (java.io.RandomAccessFile raf = new java.io.RandomAccessFile(serial, "r")) {
+                    if (raf.length() < pos) { pos = 0; line.setLength(0); }
+                    raf.seek(pos);
+                    byte[] buf = new byte[1 << 14]; int n;
+                    while ((n = raf.read(buf)) > 0) {
+                        pos += n;
+                        for (int i = 0; i < n; i++) {
+                            char c = (char) (buf[i] & 0xff);
+                            if (c != '\n') { if (c != '\r' && line.length() < 2000) line.append(c); continue; }
+                            String l = line.toString(); line.setLength(0);
+                            int k = l.indexOf("awcrash: ");
+                            if (k < 0) k = l.indexOf("androidware: ");
+                            if (k >= 0) log("[guest] " + l.substring(k));
+                        }
+                    }
+                } catch (IOException ignored) {}
+                try { Thread.sleep(1000); } catch (InterruptedException e) { return; }
+            }
+        }, "serial-follow");
+        t.setDaemon(true);
+        t.start();
     }
 
     private void copyAsset(String asset, File dst) throws IOException {
