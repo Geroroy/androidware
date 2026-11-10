@@ -59,3 +59,10 @@
 - `nativeLibraryDir`의 `libqemu-system-aarch64.so --version` 실행 **성공** (QEMU 11.1.3, exit 0, 150 ms). 비루팅 앱에서 엔진 exec 가능함을 기기에서 확인.
 - `qemu-arm`으로 32비트 bionic 벤치 실행 **실패**: `error setting PER_LINUX32 personality: Invalid argument` → abort(exit 134). 원인: 64비트 전용 커널이 `personality(PER_LINUX32)`를 EINVAL로 거부하고 32비트 bionic이 시작 시 이를 필수로 요구. 조치: 패치 `0023-android-emulate-personality.patch`(QEMU가 persona를 자체 보관). 재측정 대기 중.
 - UI: 버튼 3열 그리드, 세로보기 지원(0.0.3-m0).
+
+## 기기 실측 2차 (2026-11-10, SM-S938N, Android 16 sdk 36, kernel 6.6.98-android15, SoC SM8750)
+
+- `supported_abis: arm64-v8a`, `supported_32bit_abis: (none)` → U1 확인: 네이티브 32비트 실행 불가.
+- 패치 0023 적용 후 `qemu-arm`(TCG user mode)으로 32비트 bionic 벤치 **성공** (2회): `int_ms=177/173 fp_ms=713/712 mem_ms=18/18`, 체크섬 일치, exit 0.
+- 참고: 같은 바이너리를 PC(Xeon 2.1GHz, QEMU 8.2.2 qemu-arm)에서 돌린 값은 int 160 / fp 763 / mem 24. 기기 네이티브 기준값은 0.0.4-m0의 self-test에서 측정 예정(`libbench-arm64.so`).
+- 0.0.4-m0: "Boot test" 버튼(번들된 Ubuntu arm64 커널 + initramfs로 게스트 부팅, 64/32비트 벤치 실행 후 자동 종료, 시리얼 콘솔 출력 표시). PC QEMU 8.2.2에서 동일 명령행으로 사전 검증: 64비트 int 213/fp 1271/mem 107, 32비트 int 230/fp 1235/mem 139, exit 0.

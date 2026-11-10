@@ -42,7 +42,11 @@ public final class SelfTest {
             } else {
                 sb.append("qemu-arm not bundled in this build; skipping 32-bit user-mode test\n");
             }
-            sb.append("(64-bit native baseline must be measured from the guest or via adb; data-dir execve is blocked)\n");
+            File nat = new File(lib, "libbench-arm64.so");
+            if (nat.exists()) {
+                sb.append("-- same bench, native 64-bit on this CPU (baseline) --\n");
+                sb.append(exec(dir, 120, nat.getAbsolutePath(), "1"));
+            }
         } catch (Exception e) {
             sb.append("self-test error: ").append(e).append('\n');
         }

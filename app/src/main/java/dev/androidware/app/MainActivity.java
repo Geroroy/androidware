@@ -68,6 +68,7 @@ public class MainActivity extends Activity implements EngineService.LogListener,
 
         ((Button) findViewById(R.id.btn_host)).setOnClickListener(v -> log(HostInfo.collect(this)));
         ((Button) findViewById(R.id.btn_selftest)).setOnClickListener(v -> io.execute(() -> log(SelfTest.run(this))));
+        ((Button) findViewById(R.id.btn_boottest)).setOnClickListener(v -> bootTest());
         ((Button) findViewById(R.id.btn_kernel)).setOnClickListener(v -> pick(REQ_KERNEL));
         ((Button) findViewById(R.id.btn_initrd)).setOnClickListener(v -> pick(REQ_INITRD));
         ((Button) findViewById(R.id.btn_disk)).setOnClickListener(v -> pick(REQ_DISK));
@@ -80,7 +81,7 @@ public class MainActivity extends Activity implements EngineService.LogListener,
             startActivityForResult(i, REQ_EXPORT);
         });
 
-        log("androidware 0.0.3-m0; profile=" + profile.name + " kernel=" + profile.kernel + " initrd=" + profile.initrd + " disk=" + profile.disk);
+        log("androidware 0.0.4-m0; profile=" + profile.name + " kernel=" + profile.kernel + " initrd=" + profile.initrd + " disk=" + profile.disk);
         Intent svc = new Intent(this, EngineService.class);
         bindService(svc, conn, Context.BIND_AUTO_CREATE);
     }
@@ -112,6 +113,34 @@ public class MainActivity extends Activity implements EngineService.LogListener,
                 log("imported -> " + f);
             } catch (IOException e) { log("import failed: " + e); }
         });
+    }
+
+    /** Boots the bundled test guest (arm64 Linux kernel + initramfs running a 64-bit and a 32-bit bionic bench). */
+    private void bootTest() {
+        if (service != null && service.isRunning()) { toast("guest already running"); return; }
+        io.execute(() -> {
+            try {
+                File dir = ImportManager.guestDir(this);
+                File k = new File(dir, "test-vmlinuz-arm64"), i = new File(dir, "test-initrd.img");
+                copyAsset("testguest/vmlinuz-arm64", k);
+                copyAsset("testguest/initrd-test.img", i);
+                GuestProfile t = new GuestProfile();
+                t.name = "boottest"; t.kernel = k.getAbsolutePath(); t.initrd = i.getAbsolutePath();
+                log("== boot test: starting AArch64 guest; it powers off by itself when done ==");
+                bootStartMs = System.currentTimeMillis();
+                startForegroundService(new Intent(this, EngineService.class));
+                service.start(t);
+                ui.post(() -> vnc.connect(QemuLauncher.vncSocket(this)));
+            } catch (Exception e) { log("boot test failed: " + e); }
+        });
+    }
+
+    private volatile long bootStartMs;
+
+    private void copyAsset(String asset, File dst) throws IOException {
+        try (java.io.InputStream in = getAssets().open(asset); OutputStream out = new FileOutputStream(dst)) {
+            byte[] buf = new byte[1 << 16]; int n; while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
+        }
     }
 
     private void startGuest() {
@@ -159,7 +188,20 @@ public class MainActivity extends Activity implements EngineService.LogListener,
     }
 
     @Override public void onLine(String line) { log(line); }
-    @Override public void onExit(int code) { ui.post(() -> vnc.disconnect()); }
+    @Override public void onExit(int code) {
+        ui.post(() -> vnc.disconnect());
+        if (bootStartMs != 0) { log("guest ran for " + (System.currentTimeMillis() - bootStartMs) + " ms wall"); bootStartMs = 0; }
+        // Show what the guest printed on its serial console (last 40 lines).
+        try {
+            File serial = QemuLauncher.serialLog(this);
+            if (serial.exists()) {
+                java.util.List<String> all = java.nio.file.Files.readAllLines(serial.toPath(), java.nio.charset.StandardCharsets.ISO_8859_1);
+                StringBuilder sb = new StringBuilder("-- guest serial console (tail) --\n");
+                for (String l : all.subList(Math.max(0, all.size() - 40), all.size())) sb.append(l).append('\n');
+                log(sb.toString());
+            }
+        } catch (IOException e) { log("cannot read serial log: " + e); }
+    }
     @Override public void onVncStatus(String s) { log(s); }
 
     private void toast(String s) { ui.post(() -> Toast.makeText(this, s, Toast.LENGTH_SHORT).show()); }
