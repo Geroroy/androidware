@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 32-bit (armeabi-v7a) GLES 1.x NativeActivity: same shape as the 2011-era games (software frame
+     uploaded with glTexSubImage2D, drawn as one textured quad with glOrthof). Logs FPS to logcat. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="dev.androidware.gles1test" android:versionCode="1" android:versionName="1.0">
+    <uses-sdk android:minSdkVersion="21" android:targetSdkVersion="24" />
+    <uses-feature android:glEsVersion="0x00010000" />
+    <application android:label="GLES1 test" android:hasCode="false">
+        <activity android:name="android.app.NativeActivity" android:exported="true"
+            android:screenOrientation="portrait" android:configChanges="orientation|keyboardHidden|screenSize">
+            <meta-data android:name="android.app.lib_name" android:value="gles1test" />
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

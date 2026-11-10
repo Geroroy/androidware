@@ -7,3 +7,6 @@ experiments/pc-tcg-aarch32/work/
 dist/test-guest/
 .debug.keystore
 *.log
+dist/android-guest/
+experiments/android-guest/gles1-test/build/
+__pycache__/

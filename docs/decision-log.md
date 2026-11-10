@@ -12,3 +12,7 @@
 | D8 | 2026-11-05 | 게스트 네트워크 **기본 비활성**(`-nic none`), M0 빌드는 slirp 미포함 | 요구사항; 검은방4의 종료된 서버 접속 시도를 VM 문제와 분리 | 사용자가 켤 때만 slirp 포함 빌드 사용 |
 | D9 | 2026-11-05 | 게스트 Android 버전은 **virtio를 지원하는 GKI 계열(Android 11+ arm64 multilib)**을 1차 후보로 두고, 2.3/4.x는 보류 | goldfish 계열 구형 커널은 virtio-gpu 없음(U2) | APK 분석에서 2.3/4.x 전용 동작이 필수로 드러나면 재검토 |
 | D10 | 2026-11-05 | NDK r29, minSdk 29(앱), API 28(엔진 컴파일 기준), 16KB 페이지 정렬 링크 | Docker Hub `cimg/android:2026.10.1-ndk`에서 확보 가능한 최신 NDK; `-Wl,-z,max-page-size=16384` | — |
+| D11 | 2026-11-10 | 게스트 Android를 **Android 7.0 `system-images;android-24;default;armeabi-v7a`**(Google 공식 에뮬레이터 이미지, 전부 32비트, ranchu 3.10 커널)로 정한다. D9를 대체 | Google의 arm64 에뮬레이터 이미지는 API 21~37 모두 64비트 전용(32비트 라이브러리 없음); armv7 이미지는 게임과 같은 ABI이고 2011~2012 게임에 맞는 Android 버전; QEMU `virt`에서 바로 부팅 확인 | GLES 2.0 경로가 이 이미지로 불가능하다고 판명되면 새 커널+virtio-gpu 게스트 재검토 |
+| D12 | 2026-11-10 | ranchu 커널용 **goldfish 장치(fb, events, battery)를 엔진에 추가**(패치 0024, `-M virt,goldfish=on`). 게스트 CPU는 `cortex-a15` | 3.10 커널에 virtio-input/virtio-gpu/USB/PCI가 없어 입력은 goldfish_events뿐; 장치 3개 약 700줄, 업스트림 장치 모델과 분리된 선택 기능 | 게스트를 virtio 계열 커널로 바꾸면 제거 |
+| D13 | 2026-11-10 | 게스트 이미지는 APK에 넣지 않고 **앱이 dl.google.com에서 공식 zip을 받아(SHA-1 검증) 앱 저장소에 푼다**(또는 같은 zip을 가져오기) | Android SDK 라이선스 이미지의 재배포 회피; 사용자 조작 1회 | 자체 빌드 이미지(오픈소스)로 바꾸면 번들 검토 |
+| D14 | 2026-11-10 | NDK r29 / build-tools 35 / platform 35를 **dl.google.com 공식 배포본**으로 전환(D10의 Docker Hub 추출 대체) | 이번 세션에서 접근 가능, SHA-1 검증 | — |

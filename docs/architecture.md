@@ -24,6 +24,10 @@
         -serial file:files/run/serial.log  -nic none
         [-device virtio-gpu-pci -device virtio-multitouch-pci -device virtio-keyboard-pci]
         [-drive virtio-blk]  [-kernel/-initrd]
+        Android 7 게스트(M1, GuestProfile.KIND_ANDROID_RANCHU):
+        -M virt,highmem=off,goldfish=on -cpu cortex-a15
+        virtio-blk-device x3 (data, cache, system 순서)
+        goldfish-fb (VNC로 보이는 화면) / goldfish-events (VNC 포인터·QMP mtt → 터치) / goldfish-battery
                                                   ▼
         게스트 커널(AArch64, COMPAT) → 32비트/64비트 사용자 공간
 ```

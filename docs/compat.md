@@ -12,3 +12,6 @@
 |---|---|---|
 | PC(x86_64)에서 AArch64 게스트 + AArch32 사용자 공간 | 성공 (4개 CPU 모델) | `experiments/pc-tcg-aarch32/RESULTS.md` |
 | Galaxy S25 Ultra(SM-S938N, Android 16)에서 엔진 실행 + 게스트 커널 부팅 + 게스트 안 32비트 실행 | **성공** (2회, 2026-11-10) | 수치는 `docs/status.md` "기기 실측 4차" |
+| PC(x86_64)에서 Android 7.0 armv7 게스트 부팅(`virt,goldfish=on`) | **성공**: boot_completed 75~85초(smp 2), 홈 화면, 터치·키 | `experiments/android-guest/RESULTS.md` |
+| PC에서 게스트 안 32비트 GLES 1.x 테스트 앱 | **성공**: 설치·실행, 소프트웨어 GL 약 20 fps(480x800 전체 갱신) | 같은 문서. 게임 아님 |
+| S25 Ultra에서 Android 7.0 게스트 | 미검증 | `docs/device-test-procedure.md` M1 절 |

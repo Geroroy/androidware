@@ -33,7 +33,7 @@ import java.util.concurrent.Executors;
  * not to look good. Every action is logged to the on-screen console and to files/run/app.log.
  */
 public class MainActivity extends Activity implements EngineService.LogListener, VncView.StatusListener {
-    private static final int REQ_KERNEL = 1, REQ_INITRD = 2, REQ_DISK = 3, REQ_APK = 4, REQ_EXPORT = 5;
+    private static final int REQ_KERNEL = 1, REQ_INITRD = 2, REQ_DISK = 3, REQ_APK = 4, REQ_EXPORT = 5, REQ_ANDROID_ZIP = 6;
 
     private TextView logView;
     private ScrollView logScroll;
@@ -75,13 +75,15 @@ public class MainActivity extends Activity implements EngineService.LogListener,
         ((Button) findViewById(R.id.btn_apk)).setOnClickListener(v -> pick(REQ_APK));
         ((Button) findViewById(R.id.btn_start)).setOnClickListener(v -> startGuest());
         ((Button) findViewById(R.id.btn_stop)).setOnClickListener(v -> stopGuest());
+        ((Button) findViewById(R.id.btn_android_get)).setOnClickListener(v -> androidGuestMenu());
+        ((Button) findViewById(R.id.btn_android_start)).setOnClickListener(v -> startAndroid());
         ((Button) findViewById(R.id.btn_export)).setOnClickListener(v -> {
             Intent i = new Intent(Intent.ACTION_CREATE_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("text/plain")
                     .putExtra(Intent.EXTRA_TITLE, "androidware-log-" + new SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(new Date()) + ".txt");
             startActivityForResult(i, REQ_EXPORT);
         });
 
-        log("androidware 0.0.5-m0; profile=" + profile.name + " kernel=" + profile.kernel + " initrd=" + profile.initrd + " disk=" + profile.disk);
+        log("androidware 0.0.6-m1; profile=" + profile.name + " kernel=" + profile.kernel + " initrd=" + profile.initrd + " disk=" + profile.disk);
         Intent svc = new Intent(this, EngineService.class);
         bindService(svc, conn, Context.BIND_AUTO_CREATE);
     }
@@ -96,6 +98,17 @@ public class MainActivity extends Activity implements EngineService.LogListener,
         if (res != RESULT_OK || data == null || data.getData() == null) return;
         Uri uri = data.getData();
         if (req == REQ_EXPORT) { exportLog(uri); return; }
+        if (req == REQ_ANDROID_ZIP) {
+            log("installing Android guest from " + ImportManager.displayName(this, uri) + " ...");
+            io.execute(() -> {
+                try (java.io.InputStream in = getContentResolver().openInputStream(uri)) {
+                    if (in == null) throw new IOException("cannot open " + uri);
+                    AndroidGuest.installFromZip(this, in, this::progress);
+                    log("Android guest installed in " + AndroidGuest.dir(this));
+                } catch (IOException e) { log("Android guest install failed: " + e); }
+            });
+            return;
+        }
         String name = ImportManager.displayName(this, uri);
         long size = ImportManager.size(this, uri);
         log("importing " + name + " (" + size + " bytes)...");
@@ -136,6 +149,61 @@ public class MainActivity extends Activity implements EngineService.LogListener,
     }
 
     private volatile long bootStartMs;
+
+    private void progress(String what, long done, long total) {
+        log("  " + what + ": " + (done >> 20) + "/" + (total > 0 ? (total >> 20) : "?") + " MiB");
+    }
+
+    /** Get / import / reset the Android 7.0 (API 24, armeabi-v7a) emulator image. */
+    private void androidGuestMenu() {
+        String[] items = {
+                "Download from dl.google.com (" + (AndroidGuest.ZIP_SIZE >> 20) + " MiB)",
+                "Import armeabi-v7a-24_r07.zip",
+                "Factory reset guest data"};
+        new android.app.AlertDialog.Builder(this)
+                .setTitle("Android 7.0 guest (" + (AndroidGuest.isInstalled(this) ? "installed" : "not installed") + ")")
+                .setItems(items, (d, which) -> {
+                    if (which == 0) {
+                        new android.app.AlertDialog.Builder(this)
+                                .setTitle("Download Android system image")
+                                .setMessage("Downloads Google's official Android 7.0 ARM emulator system image:\n"
+                                        + AndroidGuest.ZIP_URL + "\n\nIts use is governed by the Android Software "
+                                        + "Development Kit License Agreement (developer.android.com/studio/terms). Continue?")
+                                .setPositiveButton("Download", (d2, w2) -> io.execute(() -> {
+                                    try {
+                                        log("downloading " + AndroidGuest.ZIP_URL);
+                                        AndroidGuest.download(this, this::progress);
+                                        log("Android guest installed in " + AndroidGuest.dir(this));
+                                    } catch (IOException e) { log("download failed: " + e); }
+                                }))
+                                .setNegativeButton(android.R.string.cancel, null).show();
+                    } else if (which == 1) {
+                        Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("application/zip");
+                        startActivityForResult(i, REQ_ANDROID_ZIP);
+                    } else {
+                        if (service != null && service.isRunning()) { toast("stop the guest first"); return; }
+                        io.execute(() -> {
+                            try { AndroidGuest.resetData(this, this::progress); log("guest data reset"); }
+                            catch (IOException e) { log("reset failed: " + e); }
+                        });
+                    }
+                }).show();
+    }
+
+    private void startAndroid() {
+        if (service == null) { toast("service not bound yet"); return; }
+        if (service.isRunning()) { toast("guest already running"); return; }
+        if (!AndroidGuest.isInstalled(this)) { toast("get the Android 7 guest first"); return; }
+        io.execute(() -> {
+            try {
+                log("== Android 7.0 guest: booting (expect a few minutes on TCG) ==");
+                bootStartMs = System.currentTimeMillis();
+                startForegroundService(new Intent(this, EngineService.class));
+                service.start(AndroidGuest.profile(this));
+                ui.post(() -> vnc.connect(QemuLauncher.vncSocket(this)));
+            } catch (IOException e) { log("start failed: " + e); }
+        });
+    }
 
     private void copyAsset(String asset, File dst) throws IOException {
         try (java.io.InputStream in = getAssets().open(asset); OutputStream out = new FileOutputStream(dst)) {

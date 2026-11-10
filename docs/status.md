@@ -1,8 +1,40 @@
 # 진행 상태와 다음 단계
 
-최종 갱신: 2026-11-05 (세션 1). 실제 기기 없이 진행했다. 기기 실행 결과는 전부 **미검증**이다.
+최종 갱신: 2026-11-10 (세션 2: Google 호스트 접근 가능). 세션 1(2026-11-05) 기록은 아래에 그대로 둔다.
 
-## 완료한 것
+## 세션 2 요약 (2026-11-10) — 게스트 Android 이미지(장애물 1) 해결, PC에서 부팅·입력·32비트 GLES 앱 실행
+
+이번 세션에서는 dl.google.com, ci.android.com, android.googlesource.com, source.android.com, qemu.org, gitlab.freedesktop.org 접근이 **가능**했다(세션 1에서는 차단).
+
+| 항목 | 결과 | 근거 |
+|---|---|---|
+| Google 에뮬레이터 arm64 시스템 이미지(API 21~37) 32비트 지원 여부 | **전부 64비트 전용**(abilist `arm64-v8a`; API 28은 `/system/lib` 0개) → 게임 실행 불가 | `experiments/android-guest/RESULTS.md` |
+| 게스트 선택 | **Android 7.0 `system-images;android-24;default;armeabi-v7a`** (전부 32비트, ranchu 3.10 커널) | 결정 D11 |
+| 엔진 패치 0024: `virt,goldfish=on` → goldfish-fb / goldfish-events(키+멀티터치) / goldfish-battery | 작성, PC 빌드·검증 | `engine/qemu/patches/0024-android-goldfish-devices.patch` |
+| PC 부팅 | `sys.boot_completed=1` **75~85초**(smp 2, TCG, 4코어 x86 호스트), 홈 화면 480x800 | 같은 문서 |
+| 입력 | VNC/QMP 포인터 → 터치스크린(좌표 정확), ESC → BACK, Settings 조작 확인 | 같은 문서 |
+| 32비트 네이티브 GLES 1.x 앱(armeabi-v7a NativeActivity) | 설치·실행 성공, PixelFlinger(소프트웨어) GLES-CM 1.0, 480x800 전체 갱신 약 20 fps(PC) | `experiments/android-guest/gles1-test/` |
+| `scripts/build-engine.sh` 처음부터 끝까지 | **성공**(깨끗한 소스 트리, 공식 NDK r29를 dl.google.com에서 받아 사용). 세션 1의 "전체 실행 미검증" 해소. `libbench-arm64.so` 빌드 단계 누락을 추가 | 이 세션 로그 |
+| 앱 0.0.6-m1 | "Android 7 guest…"(dl.google.com에서 공식 zip 다운로드+SHA-1 검증, 또는 zip 가져오기, 데이터 초기화), "Start Android" | `AndroidGuest.java`, `dist/androidware-0.0.6-m1.apk` |
+
+**기기 실행은 미검증.** 다음 측정은 `docs/device-test-procedure.md`의 "M1: Android 게스트" 절.
+
+### 세션 2 이후 남은 장애물 (중요도 순)
+
+1. **GLES 2.0 (N.O.V.A. 3)** — 이 게스트의 GL은 소프트웨어 `libagl`(GLES 1.x 전용)이다. GLES 2.0 게임은 현재 경로로 실행할 수 없다. 선택지: (a) goldfish pipe + 호스트 GLES 디코더(Android 에뮬레이터의 `android-emugl`, Apache-2.0)를 엔진에 넣기, (b) virtio-gpu를 지원하는 새 커널 + 게스트 Mesa(virgl)로 Android 7 사용자 공간을 재구성. (a)가 이 이미지와 맞는 경로다.
+2. **기기 검증** — S25 Ultra에서 부팅 시간, 홈 화면 반응, VNC 경로의 터치 지연, smp 2와 4 비교.
+3. **게임 APK 전달** — 현재는 PC에서 userdata 이미지에 써 넣는 방식만 있다. 앱에서 `files/games/*.apk`를 게스트에 넣는 경로(시작 전 ext4 이미지에 기록, 또는 virtio-9p/virtio-console 채널) 필요.
+4. **오디오** — goldfish-audio 장치 미구현(게임 무음).
+5. **간헐적 QEMU 종료 1회**(PC, smp 4, 부팅 직후 screendump) — 재현 안 됨, 기기에서 관찰되면 우선 조사.
+6. 검은방 1의 SKT ARM DRM/통신사 구성 요소 동작 여부는 실제 실행으로만 확인 가능(VM 문제와 분리해 기록).
+
+---
+
+## 세션 1 기록 (2026-11-05)
+
+실제 기기 없이 진행했다. 아래 "남은 장애물"의 1번(게스트 Android 이미지)은 세션 2에서 해결했다.
+
+### 완료한 것
 
 | 항목 | 상태 | 증거 |
 |---|---|---|
@@ -16,14 +48,14 @@
 | QEMU 빌드 (`qemu-system-aarch64` ELF) | 아래 "빌드 결과" 참조 | |
 | 앱 골격(Java, AGP 없이 빌드) + debug APK | 완료 (컴파일·서명 성공) | `scripts/build-apk.sh`, `dist/` |
 
-## 빌드 결과 (이 세션)
+### 빌드 결과 (이 세션)
 
 - 빌드 환경: Ubuntu 24.04 x86_64 컨테이너, NDK r29(clang 21), meson 1.12.1, ninja 1.11.1, build-tools 35.0.0, JDK 21.
 - `qemu-system-aarch64` (aarch64-softmmu, TCG, VNC, QMP, internal fdt, slirp): **빌드 성공.** ELF 64-bit PIE, AArch64, interpreter `/system/bin/linker64`, NEEDED = libz/libm/libdl/libc, LOAD 정렬 0x4000(16KB). 스트립 후 35,272,216 B.
 - `qemu-arm` (arm-linux-user, libandroid-shmem 링크): **빌드 성공.** 스트립 후 4,230,192 B. 추가 패치 `0022-android-api26-ipc-decls.patch`(bionic API 26+ 선언 충돌 회피) 필요.
 - APK: `dist/androidware-0.0.5-m0.apk` 39,887,888 B, 16KB zipalign 검증 통과, debug 서명.
 
-## 남은 장애물 (중요도 순)
+### 남은 장애물 (중요도 순)
 
 1. **게스트 Android 이미지(U2)** — 가장 큰 미해결 과제. 필요한 것: `virt` 보드에서 부팅하는 arm64 커널(GKI + virtio-gpu/virtio-input/virtio-blk 내장 또는 모듈), arm64+armeabi-v7a multilib 사용자 공간(AOSP GSI `aosp_arm64` 계열), 간단한 vendor(드라이버 없는 `virt` 전용 HAL: drm_hwcomposer + minigbm/virtio-gpu, Mesa virgl). 이 세션에서는 dl.google.com/ci.android.com/googlesource 접근이 막혀 이미지를 받을 수 없었다. 다음 작업자는 네트워크가 되는 환경에서 (a) AOSP GSI arm64 + GKI `boot.img`를 QEMU `virt`로 부팅 시도, (b) 실패 시 Cuttlefish `aosp_cf_arm64_phone` 이미지의 커널/램디스크를 `virt`에서 재사용 가능한지 검토, (c) 그래도 안 되면 AOSP를 직접 빌드(`virt` 전용 device 트리)하는 순서로 진행한다. **이 항목이 해결되기 전에는 게임을 설치할 수 없다.**
 2. **GPU 경로(U3)** — 게스트 Mesa virgl ↔ 호스트 virglrenderer(ANGLE 위 EGL/GLES). 참조: Termux `virglrenderer-android` 패치 10개. QEMU는 `--enable-virglrenderer --enable-opengl`로 재빌드해야 하며 `-display egl-headless` 대신 Android 서피스에 직접 그리는 디스플레이 백엔드가 필요하다.
@@ -34,19 +66,19 @@
 7. **게임 APK 미제공(U9/U10)** — N.O.V.A. 3, 검은방 4의 실제 APK/OBB가 있어야 M2를 시작할 수 있다. 앱의 "Inspect game APK"로 분석 결과를 먼저 받는다.
 8. **기기 검증(U1)** — `docs/device-test-procedure.md` 절차로 Galaxy S25 Ultra에서 1~4단계 실행. 특히 (a) `nativeLibraryDir`에서 exec 성공 여부, (b) 힙 태깅(MTE) 영향, (c) 16KB 페이지 여부, (d) TCG 성능 수치.
 
-## 다음 작업 단위 제안 (우선순위)
+### 다음 작업 단위 제안 (우선순위)
 
 1. 기기에서 스모크 테스트(절차서 1~4단계) → 결과를 `docs/compat.md`와 `docs/status.md`에 기록.
 2. 게스트 Android 이미지 확보/부팅(장애물 1). 목표: `virt`에서 부팅 로고까지, 그 다음 `adb`(virtio-vsock 또는 guest 네트워크) 접속.
 3. 사용자 제공 APK 분석 → 게스트 Android 버전/ABI 결정 확정.
 4. virgl 경로(장애물 2)와 디스플레이 백엔드(장애물 3).
 
-## 필요한 입력 (사용자)
+### 필요한 입력 (사용자)
 
 - Galaxy S25 Ultra에서 "Host check" + 스모크 테스트 로그(Export log 결과 파일).
 - N.O.V.A. 3 원작 APK(+OBB/추가 데이터)와 검은방 4 APK(+데이터) 파일. 분석 전까지 게스트 Android 버전을 확정하지 않는다.
 
-## 세션 종료 시점 기록
+### 세션 종료 시점 기록
 
 - 완료: 방식 비교/선택, PC 실험(AArch32-in-AArch64 TCG 게스트, qemu-arm으로 bionic 정적 arm32 실행), Android용 QEMU 2종 크로스 빌드, 앱 골격 + APK, 재현 스크립트, 문서.
 - 기기 실행: **미검증**(이 세션에 기기 없음). 첫 측정 항목은 앱의 "Host check"와 "Engine self-test"(qemu-arm으로 32비트 bionic 벤치를 돌려 Oryon 위 TCG 성능을 잰다), 그다음 `device-test-procedure.md`의 게스트 커널 부팅이다.

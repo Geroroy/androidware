@@ -32,6 +32,8 @@
             <Button android:id="@+id/btn_apk" android:text="@string/btn_inspect_apk" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_columnWeight="1" android:textSize="11sp" android:textAllCaps="false" android:minHeight="40dp" />
             <Button android:id="@+id/btn_start" android:text="@string/btn_start" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_columnWeight="1" android:textSize="11sp" android:textAllCaps="false" android:minHeight="40dp" />
             <Button android:id="@+id/btn_stop" android:text="@string/btn_stop" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_columnWeight="1" android:textSize="11sp" android:textAllCaps="false" android:minHeight="40dp" />
+            <Button android:id="@+id/btn_android_get" android:text="@string/btn_android_get" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_columnWeight="1" android:textSize="11sp" android:textAllCaps="false" android:minHeight="40dp" />
+            <Button android:id="@+id/btn_android_start" android:text="@string/btn_android_start" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_columnWeight="1" android:textSize="11sp" android:textAllCaps="false" android:minHeight="40dp" />
         </GridLayout>
 
         <ScrollView android:id="@+id/log_scroll" android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1">

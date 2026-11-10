@@ -10,6 +10,8 @@
     <string name="btn_inspect_apk">Inspect game APK</string>
     <string name="btn_start">Start guest</string>
     <string name="btn_stop">Stop guest</string>
+    <string name="btn_android_get">Android 7 guest…</string>
+    <string name="btn_android_start">Start Android</string>
     <string name="btn_export_log">Export log</string>
     <string name="notif_channel">Guest machine</string>
     <string name="notif_running">Guest machine is running</string>

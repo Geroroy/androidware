@@ -48,6 +48,19 @@ public final class QemuLauncher {
         if (p.kernel != null) { a.add("-kernel"); a.add(p.kernel); }
         if (p.initrd != null) { a.add("-initrd"); a.add(p.initrd); }
         if (p.kernel != null && p.cmdline != null && !p.cmdline.isEmpty()) { a.add("-append"); a.add(p.cmdline); }
+        if (GuestProfile.KIND_ANDROID_RANCHU.equals(p.kind)) {
+            // Order matters: the ranchu kernel names virtio-mmio disks in reverse creation order,
+            // and fstab.ranchu expects vda=system, vdb=cache, vdc=data.
+            a.add("-drive"); a.add("if=none,id=data,file=" + p.androidData + ",format=raw,cache=writeback");
+            a.add("-device"); a.add("virtio-blk-device,drive=data");
+            a.add("-drive"); a.add("if=none,id=cache,file=" + p.androidCache + ",format=raw,cache=writeback");
+            a.add("-device"); a.add("virtio-blk-device,drive=cache");
+            a.add("-drive"); a.add("if=none,id=system,file=" + p.androidSystem + ",format=raw,readonly=on");
+            a.add("-device"); a.add("virtio-blk-device,drive=system");
+            a.add("-global"); a.add("goldfish-fb.width=" + p.displayWidth);
+            a.add("-global"); a.add("goldfish-fb.height=" + p.displayHeight);
+            a.add("-global"); a.add("goldfish-fb.dpi=" + p.displayDpi);
+        }
         if (p.disk != null) {
             a.add("-drive"); a.add("if=none,id=hd0,file=" + p.disk + ",format=raw,cache=writeback");
             a.add("-device"); a.add("virtio-blk-pci,drive=hd0");

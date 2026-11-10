@@ -23,3 +23,17 @@
 
 ## 다음 단계로 넘어가는 조건
 - 32비트 바이너리의 `fp_ms`가 PC 실험 대비 어떤 비율인지 기록(기기 TCG 백엔드 성능의 첫 지표).
+
+## M1: Android 7.0 게스트 (앱 0.0.6-m1)
+
+준비: `adb install -r dist/androidware-0.0.6-m1.apk`(서명 키가 바뀌었으면 먼저 `adb uninstall dev.androidware.app`). 기기에 약 3 GB 여유 공간.
+
+| 단계 | 조작 | 기대 결과 | 기록할 것 |
+|---|---|---|---|
+| A1 | **Android 7 guest…** → Download (또는 PC에서 받은 `armeabi-v7a-24_r07.zip`을 Import) | 로그에 진행률, 마지막에 `Android guest installed in .../files/android24` | 다운로드·압축 해제 시간 |
+| A2 | **Start Android** | 명령행에 `-M virt,highmem=off,goldfish=on -cpu cortex-a15`, 화면에 부팅 로고("android") → 홈 화면 | 부팅 로고가 뜬 시각, 홈 화면이 뜬 시각(시작부터 초) |
+| A3 | 홈 화면에서 앱 서랍(가운데 아래 버튼) 탭, Settings 실행, 기기 BACK 버튼 | 탭 위치대로 반응, BACK은 게스트 뒤로가기 | 체감 지연(탭→화면 변화) |
+| A4 | **Export log** | `serial.log`에 `init:` 로그, 오류 시 `qemu.log` | 파일 첨부 |
+| A5 | **Stop guest** 후 다시 **Start Android** | 두 번째 부팅(데이터 유지) | 두 번째 부팅 시간 |
+
+판정: A2에서 홈 화면까지 뜨면 "기기에서 Android 게스트 부팅" 검증 완료 → `docs/compat.md` 갱신.

@@ -123,6 +123,9 @@ SELF="$ROOT/app/src/main/assets/selftest"; mkdir -p "$SELF"
 "$TC/bin/armv7a-linux-androideabi${API}-clang" -O2 -static -o "$SELF/bench-arm32-bionic" "$ROOT/experiments/pc-tcg-aarch32/bench.c" -lm
 "$TC/bin/aarch64-linux-android${API}-clang" -O2 -static -o "$SELF/bench-arm64-bionic" "$ROOT/experiments/pc-tcg-aarch32/bench.c" -lm
 "$TC/bin/llvm-strip" "$SELF"/bench-*
+# Native 64-bit baseline for the self-test, shipped as an executable named like a library (exec from nativeLibraryDir)
+"$TC/bin/aarch64-linux-android${API}-clang" -O2 -fPIE -pie -Wl,-z,max-page-size=16384 -o "$OUTLIB/libbench-arm64.so" "$ROOT/experiments/pc-tcg-aarch32/bench.c" -lm
+"$TC/bin/llvm-strip" "$OUTLIB/libbench-arm64.so"
 # The VNC server needs keymaps/en-us from the data dir (-L); it is plain data from the QEMU source tree.
 mkdir -p "$ROOT/app/src/main/assets/qemu-share/keymaps" && cp "$SRC/qemu/pc-bios/keymaps/en-us" "$ROOT/app/src/main/assets/qemu-share/keymaps/"
 ls -la "$OUTLIB"

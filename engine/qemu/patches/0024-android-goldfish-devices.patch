@@ -1,0 +1,887 @@
+diff --git a/hw/arm/Kconfig b/hw/arm/Kconfig
+index 6f5b2ad..efea378 100644
+--- a/hw/arm/Kconfig
++++ b/hw/arm/Kconfig
+@@ -37,6 +37,7 @@ config ARM_VIRT
+     select ACPI_CXL
+     select ACPI_HMAT
+     select WDT_SBSA
++    select FRAMEBUFFER # goldfish-fb (android-goldfish.c)
+ 
+ config CUBIEBOARD
+     bool
+diff --git a/hw/arm/android-goldfish.c b/hw/arm/android-goldfish.c
+new file mode 100644
+index 0000000..496539c
+--- /dev/null
++++ b/hw/arm/android-goldfish.c
+@@ -0,0 +1,683 @@
++/*
++ * Minimal "goldfish" platform devices for running Android emulator (ranchu)
++ * guest kernels on the upstream 'virt' machine.
++ *
++ *   goldfish-fb       framebuffer (generic,goldfish-fb), scanned out from guest RAM
++ *   goldfish-events   input (generic,goldfish-events-keypad): keys + multi-touch
++ *   goldfish-battery  battery/AC status (generic,goldfish-battery), always full on AC
++ *
++ * The register interfaces follow the guest drivers in the Android goldfish
++ * kernels (drivers/video/goldfishfb.c, drivers/input/keyboard/goldfish_events.c,
++ * drivers/power/goldfish_battery.c). Written for androidware.
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#include "qemu/osdep.h"
++#include "qemu/log.h"
++#include "qemu/module.h"
++#include "qapi/error.h"
++#include "hw/core/sysbus.h"
++#include "hw/core/irq.h"
++#include "hw/core/qdev-properties.h"
++#include "migration/vmstate.h"
++#include "system/address-spaces.h"
++#include "ui/console.h"
++#include "ui/input.h"
++#include "ui/pixel_ops.h"
++#include "standard-headers/linux/input.h"
++#include "hw/display/framebuffer.h"
++#include "qom/object.h"
++#include "hw/arm/android-goldfish.h"
++
++/* ------------------------------------------------------------------------ */
++/* goldfish-fb                                                              */
++
++enum {
++    FB_GET_WIDTH        = 0x00,
++    FB_GET_HEIGHT       = 0x04,
++    FB_INT_STATUS       = 0x08,
++    FB_INT_ENABLE       = 0x0c,
++    FB_SET_BASE         = 0x10,
++    FB_SET_ROTATION     = 0x14,
++    FB_SET_BLANK        = 0x18,
++    FB_GET_PHYS_WIDTH   = 0x1c,
++    FB_GET_PHYS_HEIGHT  = 0x20,
++    FB_GET_FORMAT       = 0x24,
++};
++#define FB_INT_VSYNC            (1u << 0)
++#define FB_INT_BASE_UPDATE_DONE (1u << 1)
++#define HAL_PIXEL_FORMAT_RGB_565 4
++
++OBJECT_DECLARE_SIMPLE_TYPE(GoldfishFBState, GOLDFISH_FB)
++
++struct GoldfishFBState {
++    SysBusDevice parent_obj;
++    MemoryRegion iomem;
++    qemu_irq irq;
++    QemuConsole *con;
++    MemoryRegionSection fbsection;
++    uint32_t width, height, dpi;
++    uint32_t int_status, int_enable;
++    uint32_t base, blank, rotation;
++    bool invalidate;
++};
++
++static void goldfish_fb_update_irq(GoldfishFBState *s)
++{
++    qemu_set_irq(s->irq, (s->int_status & s->int_enable) != 0);
++}
++
++static void goldfish_fb_draw_line(void *opaque, uint8_t *d, const uint8_t *s,
++                                  int width, int deststep)
++{
++    uint32_t *dst = (uint32_t *)d;
++    while (width--) {
++        uint16_t v = lduw_le_p(s);
++        unsigned r = (v >> 11) & 0x1f, g = (v >> 5) & 0x3f, b = v & 0x1f;
++        *dst++ = rgb_to_pixel32((r << 3) | (r >> 2), (g << 2) | (g >> 4),
++                                (b << 3) | (b >> 2));
++        s += 2;
++    }
++}
++
++static bool goldfish_fb_update_display(void *opaque)
++{
++    GoldfishFBState *s = opaque;
++    DisplaySurface *surface = qemu_console_surface(s->con);
++    int first = 0, last = 0;
++    int src_width = s->width * 2;
++
++    /* vsync for guests that enable it */
++    if (s->int_enable & FB_INT_VSYNC) {
++        s->int_status |= FB_INT_VSYNC;
++        goldfish_fb_update_irq(s);
++    }
++    if (!s->base || !surface) {
++        return true;
++    }
++    if (surface_width(surface) != s->width ||
++        surface_height(surface) != s->height) {
++        qemu_console_resize(s->con, s->width, s->height);
++        surface = qemu_console_surface(s->con);
++        s->invalidate = true;
++    }
++    if (s->blank) {
++        return true;
++    }
++    if (s->invalidate) {
++        framebuffer_update_memory_section(&s->fbsection, get_system_memory(),
++                                          s->base, s->height, src_width);
++    }
++    first = -1;
++    framebuffer_update_display(surface, &s->fbsection, s->width, s->height,
++                               src_width, surface_stride(surface), 0,
++                               s->invalidate, goldfish_fb_draw_line, s,
++                               &first, &last);
++    if (first >= 0) {
++        qemu_console_update(s->con, 0, first, s->width, last - first + 1);
++    }
++    s->invalidate = false;
++    return true;
++}
++
++static void goldfish_fb_invalidate(void *opaque)
++{
++    GoldfishFBState *s = opaque;
++    s->invalidate = true;
++}
++
++static uint64_t goldfish_fb_read(void *opaque, hwaddr offset, unsigned size)
++{
++    GoldfishFBState *s = opaque;
++    uint32_t ret;
++
++    switch (offset) {
++    case FB_GET_WIDTH:
++        return s->width;
++    case FB_GET_HEIGHT:
++        return s->height;
++    case FB_INT_STATUS:
++        ret = s->int_status & s->int_enable;
++        s->int_status &= ~ret;
++        goldfish_fb_update_irq(s);
++        return ret;
++    case FB_GET_PHYS_WIDTH:     /* millimetres */
++        return s->width * 254 / (s->dpi * 10);
++    case FB_GET_PHYS_HEIGHT:
++        return s->height * 254 / (s->dpi * 10);
++    case FB_GET_FORMAT:
++        return HAL_PIXEL_FORMAT_RGB_565;
++    default:
++        qemu_log_mask(LOG_GUEST_ERROR, "goldfish-fb: bad read 0x%" HWADDR_PRIx
++                      "\n", offset);
++        return 0;
++    }
++}
++
++static void goldfish_fb_write(void *opaque, hwaddr offset, uint64_t val,
++                              unsigned size)
++{
++    GoldfishFBState *s = opaque;
++
++    switch (offset) {
++    case FB_INT_ENABLE:
++        s->int_enable = val;
++        goldfish_fb_update_irq(s);
++        break;
++    case FB_SET_BASE:
++        s->base = val;
++        s->invalidate = true;
++        /* the new buffer is shown from the next refresh on */
++        s->int_status |= FB_INT_BASE_UPDATE_DONE;
++        goldfish_fb_update_irq(s);
++        break;
++    case FB_SET_ROTATION:
++        s->rotation = val;
++        break;
++    case FB_SET_BLANK:
++        s->blank = val;
++        s->invalidate = true;
++        break;
++    default:
++        qemu_log_mask(LOG_GUEST_ERROR, "goldfish-fb: bad write 0x%" HWADDR_PRIx
++                      "\n", offset);
++    }
++}
++
++static const MemoryRegionOps goldfish_fb_ops = {
++    .read = goldfish_fb_read,
++    .write = goldfish_fb_write,
++    .endianness = DEVICE_LITTLE_ENDIAN,
++    .valid = { .min_access_size = 4, .max_access_size = 4 },
++};
++
++static const GraphicHwOps goldfish_fb_gfx_ops = {
++    .invalidate = goldfish_fb_invalidate,
++    .gfx_update = goldfish_fb_update_display,
++};
++
++static void goldfish_fb_realize(DeviceState *dev, Error **errp)
++{
++    GoldfishFBState *s = GOLDFISH_FB(dev);
++
++    if (!s->width || !s->height || !s->dpi) {
++        error_setg(errp, "goldfish-fb: width, height and dpi must be non-zero");
++        return;
++    }
++    memory_region_init_io(&s->iomem, OBJECT(s), &goldfish_fb_ops, s,
++                          "goldfish-fb", 0x1000);
++    sysbus_init_mmio(SYS_BUS_DEVICE(dev), &s->iomem);
++    sysbus_init_irq(SYS_BUS_DEVICE(dev), &s->irq);
++    s->con = qemu_graphic_console_create(dev, 0, &goldfish_fb_gfx_ops, s);
++    qemu_console_resize(s->con, s->width, s->height);
++}
++
++static void goldfish_fb_reset(DeviceState *dev)
++{
++    GoldfishFBState *s = GOLDFISH_FB(dev);
++    s->int_status = s->int_enable = 0;
++    s->base = s->blank = s->rotation = 0;
++    s->invalidate = true;
++}
++
++static int goldfish_fb_post_load(void *opaque, int version_id)
++{
++    goldfish_fb_invalidate(opaque);
++    return 0;
++}
++
++static const VMStateDescription vmstate_goldfish_fb = {
++    .name = "goldfish-fb",
++    .version_id = 1,
++    .minimum_version_id = 1,
++    .post_load = goldfish_fb_post_load,
++    .fields = (const VMStateField[]) {
++        VMSTATE_UINT32(int_status, GoldfishFBState),
++        VMSTATE_UINT32(int_enable, GoldfishFBState),
++        VMSTATE_UINT32(base, GoldfishFBState),
++        VMSTATE_UINT32(blank, GoldfishFBState),
++        VMSTATE_UINT32(rotation, GoldfishFBState),
++        VMSTATE_END_OF_LIST()
++    }
++};
++
++static const Property goldfish_fb_properties[] = {
++    DEFINE_PROP_UINT32("width", GoldfishFBState, width, 480),
++    DEFINE_PROP_UINT32("height", GoldfishFBState, height, 800),
++    DEFINE_PROP_UINT32("dpi", GoldfishFBState, dpi, 240),
++};
++
++static void goldfish_fb_class_init(ObjectClass *klass, const void *data)
++{
++    DeviceClass *dc = DEVICE_CLASS(klass);
++    dc->realize = goldfish_fb_realize;
++    device_class_set_legacy_reset(dc, goldfish_fb_reset);
++    dc->vmsd = &vmstate_goldfish_fb;
++    device_class_set_props(dc, goldfish_fb_properties);
++    set_bit(DEVICE_CATEGORY_DISPLAY, dc->categories);
++}
++
++/* ------------------------------------------------------------------------ */
++/* goldfish-events                                                          */
++
++enum {
++    EV_REG_READ     = 0x00,
++    EV_REG_SET_PAGE = 0x00,
++    EV_REG_LEN      = 0x04,
++    EV_REG_DATA     = 0x08,
++};
++#define EV_PAGE_NAME    0x00000
++#define EV_PAGE_EVBITS  0x10000
++#define EV_PAGE_ABSDATA (0x20000 | EV_ABS)
++
++#define GF_EV_QUEUE     1024          /* in events (type, code, value) */
++#define GF_EV_SLOTS     10
++#define GF_EV_ABS_MAX   0x7fff        /* same range as QEMU's absolute axes */
++
++OBJECT_DECLARE_SIMPLE_TYPE(GoldfishEventsState, GOLDFISH_EVENTS)
++
++struct GoldfishEventsState {
++    SysBusDevice parent_obj;
++    MemoryRegion iomem;
++    qemu_irq irq;
++    QemuInputHandlerState *hs;
++    char *name;
++    uint32_t page;
++    /* queue of u32 words; three words per event */
++    uint32_t q[GF_EV_QUEUE * 3];
++    uint32_t q_head, q_count;
++    /* single-pointer -> touch emulation state */
++    int32_t ptr_x, ptr_y;
++    bool ptr_down, ptr_dirty, ptr_was_down;
++    int32_t next_tracking_id;
++    /* multi-touch: last slot sent */
++    int32_t cur_slot;
++};
++
++static void goldfish_events_update_irq(GoldfishEventsState *s)
++{
++    qemu_set_irq(s->irq, s->q_count != 0);
++}
++
++static void goldfish_events_put(GoldfishEventsState *s, uint32_t type,
++                                uint32_t code, int32_t value)
++{
++    uint32_t cap = ARRAY_SIZE(s->q);
++    if (s->q_count + 3 > cap) {
++        qemu_log_mask(LOG_UNIMP, "goldfish-events: queue full, event dropped\n");
++        return;
++    }
++    s->q[(s->q_head + s->q_count++) % cap] = type;
++    s->q[(s->q_head + s->q_count++) % cap] = code;
++    s->q[(s->q_head + s->q_count++) % cap] = (uint32_t)value;
++    goldfish_events_update_irq(s);
++}
++
++static void gf_set_bit(uint8_t *bits, unsigned bit)
++{
++    bits[bit / 8] |= 1u << (bit % 8);
++}
++
++/* Fill the page selected by s->page; returns its length */
++static unsigned goldfish_events_page(GoldfishEventsState *s, uint8_t *buf,
++                                     unsigned bufsize)
++{
++    unsigned len = 0;
++
++    memset(buf, 0, bufsize);
++    if (s->page == EV_PAGE_NAME) {
++        len = MIN(strlen(s->name), bufsize);
++        memcpy(buf, s->name, len);
++    } else if (s->page == EV_PAGE_ABSDATA) {
++        static const struct { unsigned code; int32_t min, max; } abs[] = {
++            { ABS_X, 0, GF_EV_ABS_MAX },
++            { ABS_Y, 0, GF_EV_ABS_MAX },
++            { ABS_MT_SLOT, 0, GF_EV_SLOTS - 1 },
++            { ABS_MT_TOUCH_MAJOR, 0, 0x7f },
++            { ABS_MT_POSITION_X, 0, GF_EV_ABS_MAX },
++            { ABS_MT_POSITION_Y, 0, GF_EV_ABS_MAX },
++            { ABS_MT_TRACKING_ID, 0, 0xffff },
++            { ABS_MT_PRESSURE, 0, 0xff },
++        };
++        uint32_t *w = (uint32_t *)buf;
++        len = (ABS_MT_PRESSURE + 1) * 16;
++        assert(len <= bufsize);
++        for (int i = 0; i < ARRAY_SIZE(abs); i++) {
++            stl_le_p(&w[abs[i].code * 4 + 0], abs[i].min);
++            stl_le_p(&w[abs[i].code * 4 + 1], abs[i].max);
++        }
++    } else if ((s->page & ~0xffffu) == EV_PAGE_EVBITS) {
++        unsigned type = s->page & 0xffff;
++        switch (type) {
++        case EV_SYN:
++            gf_set_bit(buf, EV_SYN);
++            gf_set_bit(buf, EV_KEY);
++            gf_set_bit(buf, EV_ABS);
++            len = 1;
++            break;
++        case EV_KEY:
++            /* all keyboard keys QEMU can produce, plus BTN_TOUCH */
++            for (unsigned i = 0; i < qemu_input_map_qcode_to_linux_len; i++) {
++                unsigned k = qemu_input_map_qcode_to_linux[i];
++                if (k && k < 0x200) {
++                    gf_set_bit(buf, k);
++                }
++            }
++            gf_set_bit(buf, KEY_BACK);
++            gf_set_bit(buf, KEY_HOMEPAGE);
++            gf_set_bit(buf, KEY_MENU);
++            gf_set_bit(buf, KEY_SEARCH);
++            gf_set_bit(buf, BTN_TOUCH);
++            len = 0x200 / 8;
++            break;
++        case EV_ABS:
++            gf_set_bit(buf, ABS_X);
++            gf_set_bit(buf, ABS_Y);
++            gf_set_bit(buf, ABS_MT_SLOT);
++            gf_set_bit(buf, ABS_MT_TOUCH_MAJOR);
++            gf_set_bit(buf, ABS_MT_POSITION_X);
++            gf_set_bit(buf, ABS_MT_POSITION_Y);
++            gf_set_bit(buf, ABS_MT_TRACKING_ID);
++            gf_set_bit(buf, ABS_MT_PRESSURE);
++            len = (ABS_MT_PRESSURE + 8) / 8;
++            break;
++        default:
++            len = 0;
++        }
++    }
++    return len;
++}
++
++static uint64_t goldfish_events_read(void *opaque, hwaddr offset, unsigned size)
++{
++    GoldfishEventsState *s = opaque;
++    uint8_t buf[0x400];
++    unsigned len;
++
++    if (offset == EV_REG_READ && size == 4) {
++        uint32_t v = 0;
++        if (s->q_count) {
++            v = s->q[s->q_head];
++            s->q_head = (s->q_head + 1) % ARRAY_SIZE(s->q);
++            s->q_count--;
++            goldfish_events_update_irq(s);
++        }
++        return v;
++    }
++    len = goldfish_events_page(s, buf, sizeof(buf));
++    if (offset == EV_REG_LEN) {
++        return len;
++    }
++    if (offset >= EV_REG_DATA && offset - EV_REG_DATA + size <= sizeof(buf)) {
++        return ldn_le_p(buf + offset - EV_REG_DATA, size);
++    }
++    qemu_log_mask(LOG_GUEST_ERROR, "goldfish-events: bad read 0x%" HWADDR_PRIx
++                  "\n", offset);
++    return 0;
++}
++
++static void goldfish_events_write(void *opaque, hwaddr offset, uint64_t val,
++                                  unsigned size)
++{
++    GoldfishEventsState *s = opaque;
++
++    if (offset == EV_REG_SET_PAGE) {
++        s->page = val;
++    } else {
++        qemu_log_mask(LOG_GUEST_ERROR, "goldfish-events: bad write 0x%"
++                      HWADDR_PRIx "\n", offset);
++    }
++}
++
++static const MemoryRegionOps goldfish_events_ops = {
++    .read = goldfish_events_read,
++    .write = goldfish_events_write,
++    .endianness = DEVICE_LITTLE_ENDIAN,
++    .valid = { .min_access_size = 1, .max_access_size = 4 },
++    .impl = { .min_access_size = 1, .max_access_size = 4 },
++};
++
++static void goldfish_events_mt_slot(GoldfishEventsState *s, int slot)
++{
++    if (s->cur_slot != slot) {
++        goldfish_events_put(s, EV_ABS, ABS_MT_SLOT, slot);
++        s->cur_slot = slot;
++    }
++}
++
++static void goldfish_events_handle(DeviceState *dev, QemuConsole *src,
++                                   QemuInputEvent *evt)
++{
++    GoldfishEventsState *s = GOLDFISH_EVENTS(dev);
++
++    switch (evt->type) {
++    case INPUT_EVENT_KIND_KEY:
++        if (evt->key.key) {
++            goldfish_events_put(s, EV_KEY, evt->key.key, evt->key.down);
++        }
++        break;
++    case INPUT_EVENT_KIND_BTN:
++        /* the (single) pointer acts as finger 0 */
++        if (evt->btn.button == INPUT_BUTTON_LEFT) {
++            s->ptr_down = evt->btn.down;
++            s->ptr_dirty = true;
++        }
++        break;
++    case INPUT_EVENT_KIND_ABS:
++        if (evt->abs.axis == INPUT_AXIS_X) {
++            s->ptr_x = evt->abs.value;
++        } else if (evt->abs.axis == INPUT_AXIS_Y) {
++            s->ptr_y = evt->abs.value;
++        }
++        s->ptr_dirty = true;
++        break;
++    case INPUT_EVENT_KIND_MTT:
++        if (evt->mtt.slot >= GF_EV_SLOTS) {
++            break;
++        }
++        switch (evt->mtt.type) {
++        case INPUT_MULTI_TOUCH_TYPE_BEGIN:
++            goldfish_events_mt_slot(s, evt->mtt.slot);
++            goldfish_events_put(s, EV_ABS, ABS_MT_TRACKING_ID,
++                                evt->mtt.tracking_id & 0xffff);
++            goldfish_events_put(s, EV_ABS, ABS_MT_PRESSURE, 0x80);
++            goldfish_events_put(s, EV_ABS, ABS_MT_TOUCH_MAJOR, 0x10);
++            break;
++        case INPUT_MULTI_TOUCH_TYPE_UPDATE:
++        case INPUT_MULTI_TOUCH_TYPE_DATA:
++            goldfish_events_mt_slot(s, evt->mtt.slot);
++            if (evt->mtt.axis == INPUT_AXIS_X) {
++                goldfish_events_put(s, EV_ABS, ABS_MT_POSITION_X,
++                                    evt->mtt.value);
++            } else if (evt->mtt.axis == INPUT_AXIS_Y) {
++                goldfish_events_put(s, EV_ABS, ABS_MT_POSITION_Y,
++                                    evt->mtt.value);
++            }
++            break;
++        case INPUT_MULTI_TOUCH_TYPE_END:
++        case INPUT_MULTI_TOUCH_TYPE_CANCEL:
++            goldfish_events_mt_slot(s, evt->mtt.slot);
++            goldfish_events_put(s, EV_ABS, ABS_MT_TRACKING_ID, -1);
++            break;
++        default:
++            break;
++        }
++        break;
++    default:
++        break;
++    }
++}
++
++static void goldfish_events_sync(DeviceState *dev)
++{
++    GoldfishEventsState *s = GOLDFISH_EVENTS(dev);
++
++    if (s->ptr_dirty) {
++        goldfish_events_mt_slot(s, 0);
++        if (s->ptr_down && !s->ptr_was_down) {
++            goldfish_events_put(s, EV_ABS, ABS_MT_TRACKING_ID,
++                                s->next_tracking_id++ & 0xffff);
++            goldfish_events_put(s, EV_ABS, ABS_MT_PRESSURE, 0x80);
++            goldfish_events_put(s, EV_ABS, ABS_MT_TOUCH_MAJOR, 0x10);
++        }
++        if (s->ptr_down) {
++            goldfish_events_put(s, EV_ABS, ABS_MT_POSITION_X, s->ptr_x);
++            goldfish_events_put(s, EV_ABS, ABS_MT_POSITION_Y, s->ptr_y);
++        }
++        /*
++         * The guest driver issues input_sync() after every EV_KEY, so
++         * BTN_TOUCH must come after the coordinates of the new contact.
++         */
++        if (s->ptr_down && !s->ptr_was_down) {
++            goldfish_events_put(s, EV_KEY, BTN_TOUCH, 1);
++        }
++        if (!s->ptr_down && s->ptr_was_down) {
++            goldfish_events_put(s, EV_ABS, ABS_MT_TRACKING_ID, -1);
++            goldfish_events_put(s, EV_KEY, BTN_TOUCH, 0);
++        }
++        s->ptr_was_down = s->ptr_down;
++        s->ptr_dirty = false;
++    }
++    goldfish_events_put(s, EV_SYN, SYN_REPORT, 0);
++}
++
++static const QemuInputHandler goldfish_events_handler = {
++    .name  = "goldfish-events",
++    .mask  = INPUT_EVENT_MASK_KEY | INPUT_EVENT_MASK_BTN |
++             INPUT_EVENT_MASK_ABS | INPUT_EVENT_MASK_MTT,
++    .event = goldfish_events_handle,
++    .sync  = goldfish_events_sync,
++};
++
++static void goldfish_events_realize(DeviceState *dev, Error **errp)
++{
++    GoldfishEventsState *s = GOLDFISH_EVENTS(dev);
++
++    if (!s->name || !*s->name) {
++        error_setg(errp, "goldfish-events: 'name' must be set");
++        return;
++    }
++    memory_region_init_io(&s->iomem, OBJECT(s), &goldfish_events_ops, s,
++                          "goldfish-events", 0x1000);
++    sysbus_init_mmio(SYS_BUS_DEVICE(dev), &s->iomem);
++    sysbus_init_irq(SYS_BUS_DEVICE(dev), &s->irq);
++    s->hs = qemu_input_handler_register(dev, &goldfish_events_handler);
++    qemu_input_handler_activate(s->hs);
++}
++
++static void goldfish_events_reset(DeviceState *dev)
++{
++    GoldfishEventsState *s = GOLDFISH_EVENTS(dev);
++    s->page = 0;
++    s->q_head = s->q_count = 0;
++    s->cur_slot = 0;
++    s->ptr_down = s->ptr_dirty = s->ptr_was_down = false;
++}
++
++static const Property goldfish_events_properties[] = {
++    /* "qwerty2" picks up the emulator's qwerty2.idc (touchscreen) + qwerty.kl */
++    DEFINE_PROP_STRING("name", GoldfishEventsState, name),
++};
++
++static void goldfish_events_class_init(ObjectClass *klass, const void *data)
++{
++    DeviceClass *dc = DEVICE_CLASS(klass);
++    dc->realize = goldfish_events_realize;
++    device_class_set_legacy_reset(dc, goldfish_events_reset);
++    device_class_set_props(dc, goldfish_events_properties);
++    set_bit(DEVICE_CATEGORY_INPUT, dc->categories);
++}
++
++/* ------------------------------------------------------------------------ */
++/* goldfish-battery                                                         */
++
++enum {
++    BATTERY_INT_STATUS  = 0x00,
++    BATTERY_INT_ENABLE  = 0x04,
++    BATTERY_AC_ONLINE   = 0x08,
++    BATTERY_STATUS      = 0x0c,
++    BATTERY_HEALTH      = 0x10,
++    BATTERY_PRESENT     = 0x14,
++    BATTERY_CAPACITY    = 0x18,
++};
++
++OBJECT_DECLARE_SIMPLE_TYPE(GoldfishBatteryState, GOLDFISH_BATTERY)
++
++struct GoldfishBatteryState {
++    SysBusDevice parent_obj;
++    MemoryRegion iomem;
++    qemu_irq irq;
++    uint32_t int_enable;
++};
++
++static uint64_t goldfish_battery_read(void *opaque, hwaddr offset,
++                                      unsigned size)
++{
++    switch (offset) {
++    case BATTERY_AC_ONLINE:
++        return 1;
++    case BATTERY_STATUS:
++        return 4;   /* POWER_SUPPLY_STATUS_FULL */
++    case BATTERY_HEALTH:
++        return 1;   /* POWER_SUPPLY_HEALTH_GOOD */
++    case BATTERY_PRESENT:
++        return 1;
++    case BATTERY_CAPACITY:
++        return 100;
++    default:
++        return 0;   /* INT_STATUS and newer optional registers */
++    }
++}
++
++static void goldfish_battery_write(void *opaque, hwaddr offset, uint64_t val,
++                                   unsigned size)
++{
++    GoldfishBatteryState *s = opaque;
++    if (offset == BATTERY_INT_ENABLE) {
++        s->int_enable = val;
++    }
++}
++
++static const MemoryRegionOps goldfish_battery_ops = {
++    .read = goldfish_battery_read,
++    .write = goldfish_battery_write,
++    .endianness = DEVICE_LITTLE_ENDIAN,
++    .valid = { .min_access_size = 4, .max_access_size = 4 },
++};
++
++static void goldfish_battery_realize(DeviceState *dev, Error **errp)
++{
++    GoldfishBatteryState *s = GOLDFISH_BATTERY(dev);
++    memory_region_init_io(&s->iomem, OBJECT(s), &goldfish_battery_ops, s,
++                          "goldfish-battery", 0x1000);
++    sysbus_init_mmio(SYS_BUS_DEVICE(dev), &s->iomem);
++    sysbus_init_irq(SYS_BUS_DEVICE(dev), &s->irq);
++}
++
++static void goldfish_battery_class_init(ObjectClass *klass, const void *data)
++{
++    DeviceClass *dc = DEVICE_CLASS(klass);
++    dc->realize = goldfish_battery_realize;
++}
++
++static const TypeInfo android_goldfish_types[] = {
++    {
++        .name = TYPE_GOLDFISH_FB,
++        .parent = TYPE_SYS_BUS_DEVICE,
++        .instance_size = sizeof(GoldfishFBState),
++        .class_init = goldfish_fb_class_init,
++    }, {
++        .name = TYPE_GOLDFISH_EVENTS,
++        .parent = TYPE_SYS_BUS_DEVICE,
++        .instance_size = sizeof(GoldfishEventsState),
++        .class_init = goldfish_events_class_init,
++    }, {
++        .name = TYPE_GOLDFISH_BATTERY,
++        .parent = TYPE_SYS_BUS_DEVICE,
++        .instance_size = sizeof(GoldfishBatteryState),
++        .class_init = goldfish_battery_class_init,
++    },
++};
++
++DEFINE_TYPES(android_goldfish_types)
+diff --git a/hw/arm/meson.build b/hw/arm/meson.build
+index 4233a80..756df22 100644
+--- a/hw/arm/meson.build
++++ b/hw/arm/meson.build
+@@ -1,5 +1,5 @@
+ arm_common_ss = ss.source_set()
+-arm_common_ss.add(when: 'CONFIG_ARM_VIRT', if_true: files('virt.c'))
++arm_common_ss.add(when: 'CONFIG_ARM_VIRT', if_true: files('virt.c', 'android-goldfish.c'))
+ arm_common_ss.add(when: 'CONFIG_ACPI', if_true: files('virt-acpi-build.c'))
+ arm_common_ss.add(when: 'CONFIG_DIGIC', if_true: files('digic_boards.c'))
+ arm_common_ss.add(when: 'CONFIG_EMCRAFT_SF2', if_true: files('msf2-som.c'))
+diff --git a/hw/arm/virt.c b/hw/arm/virt.c
+index 219597c..dc279ba 100644
+--- a/hw/arm/virt.c
++++ b/hw/arm/virt.c
+@@ -36,6 +36,7 @@
+ #include "monitor/qdev.h"
+ #include "hw/core/sysbus.h"
+ #include "hw/arm/boot.h"
++#include "hw/arm/android-goldfish.h"
+ #include "hw/arm/virt.h"
+ #include "hw/arm/machines-qom.h"
+ #include "hw/block/flash.h"
+@@ -211,6 +212,10 @@ static const MemMapEntry base_memmap[] = {
+     [VIRT_PVTIME] =             { 0x090a0000, 0x00010000 },
+     [VIRT_SECURE_GPIO] =        { 0x090b0000, 0x00001000 },
+     [VIRT_ACPI_PCIHP] =         { 0x090c0000, ACPI_PCIHP_SIZE },
++    /* Android goldfish devices, only with goldfish=on */
++    [VIRT_GOLDFISH_FB] =        { 0x09100000, 0x00001000 },
++    [VIRT_GOLDFISH_EVENTS] =    { 0x09110000, 0x00001000 },
++    [VIRT_GOLDFISH_BATTERY] =   { 0x09120000, 0x00001000 },
+     [VIRT_MMIO] =               { 0x0a000000, 0x00000200 },
+     /* ...repeating for a total of NUM_VIRTIO_TRANSPORTS, each of that size */
+     [VIRT_PLATFORM_BUS] =       { 0x0c000000, 0x02000000 },
+@@ -268,6 +273,9 @@ static const int a15irqmap[] = {
+     [VIRT_UART1] = 8,
+     [VIRT_ACPI_GED] = 9,
+     [VIRT_GWDT_WS0] = 10,
++    [VIRT_GOLDFISH_FB] = 11,
++    [VIRT_GOLDFISH_EVENTS] = 12,
++    [VIRT_GOLDFISH_BATTERY] = 13,
+     [VIRT_MMIO] = 16, /* ...to 16 + NUM_VIRTIO_TRANSPORTS - 1 */
+     [VIRT_GIC_V2M] = 48, /* ...to 48 + NUM_GICV2M_SPIS - 1 */
+     [VIRT_SMMU] = 74,    /* ...to 74 + NUM_SMMU_IRQS - 1 */
+@@ -1576,6 +1584,59 @@ static void create_rtc(const VirtMachineState *vms)
+     g_free(nodename);
+ }
+ 
++/*
++ * Android emulator ("ranchu") guest kernels have no virtio-gpu/virtio-input
++ * drivers; they drive the goldfish framebuffer, event and battery devices.
++ * Width/height/dpi and the input device name can be changed with
++ * -global goldfish-fb.width=... / -global goldfish-events.name=...
++ */
++static void create_goldfish(const VirtMachineState *vms)
++{
++    static const struct {
++        int idx;
++        const char *type;
++        const char *compat;
++    } devs[] = {
++        { VIRT_GOLDFISH_FB, TYPE_GOLDFISH_FB, "generic,goldfish-fb" },
++        { VIRT_GOLDFISH_EVENTS, TYPE_GOLDFISH_EVENTS,
++          "generic,goldfish-events-keypad" },
++        { VIRT_GOLDFISH_BATTERY, TYPE_GOLDFISH_BATTERY,
++          "generic,goldfish-battery" },
++    };
++    MachineState *ms = MACHINE(vms);
++
++    for (int i = 0; i < ARRAY_SIZE(devs); i++) {
++        hwaddr base = vms->memmap[devs[i].idx].base;
++        hwaddr size = vms->memmap[devs[i].idx].size;
++        int irq = vms->irqmap[devs[i].idx];
++        DeviceState *dev = qdev_new(devs[i].type);
++        char *nodename;
++
++        if (devs[i].idx == VIRT_GOLDFISH_EVENTS) {
++            g_autofree char *name =
++                object_property_get_str(OBJECT(dev), "name", NULL);
++            if (!name || !*name) {
++                qdev_prop_set_string(dev, "name", "qwerty2");
++            }
++        }
++        sysbus_realize_and_unref(SYS_BUS_DEVICE(dev), &error_fatal);
++        sysbus_mmio_map(SYS_BUS_DEVICE(dev), 0, base);
++        sysbus_connect_irq(SYS_BUS_DEVICE(dev), 0,
++                           qdev_get_gpio_in(vms->gic, irq));
++
++        nodename = g_strdup_printf("/goldfish@%" PRIx64, base);
++        qemu_fdt_add_subnode(ms->fdt, nodename);
++        qemu_fdt_setprop_string(ms->fdt, nodename, "compatible",
++                                devs[i].compat);
++        qemu_fdt_setprop_sized_cells(ms->fdt, nodename, "reg",
++                                     2, base, 2, size);
++        qemu_fdt_setprop_cells(ms->fdt, nodename, "interrupts",
++                               gic_fdt_irq_type_spi(vms), irq,
++                               GIC_FDT_IRQ_FLAGS_LEVEL_HI);
++        g_free(nodename);
++    }
++}
++
+ static DeviceState *gpio_key_dev;
+ static void virt_powerdown_req(Notifier *n, void *opaque)
+ {
+@@ -3208,6 +3269,10 @@ static void machvirt_init(MachineState *machine)
+ 
+     create_rtc(vms);
+ 
++    if (vms->goldfish) {
++        create_goldfish(vms);
++    }
++
+     create_pcie(vms);
+     create_cxl_host_reg_region(vms);
+ 
+@@ -3504,6 +3569,16 @@ static void virt_set_virtio_transports(Object *obj, Visitor *v,
+     vms->virtio_transports = transports;
+ }
+ 
++static bool virt_get_goldfish(Object *obj, Error **errp)
++{
++    return VIRT_MACHINE(obj)->goldfish;
++}
++
++static void virt_set_goldfish(Object *obj, bool value, Error **errp)
++{
++    VIRT_MACHINE(obj)->goldfish = value;
++}
++
+ static bool virt_get_dtb_randomness(Object *obj, Error **errp)
+ {
+     VirtMachineState *vms = VIRT_MACHINE(obj);
+@@ -4318,6 +4393,13 @@ static void virt_machine_class_init(ObjectClass *oc, const void *data)
+                                           "Set MSI settings. "
+                                           "Valid values are auto, gicv2m, its and off");
+ 
++    object_class_property_add_bool(oc, "goldfish", virt_get_goldfish,
++                                   virt_set_goldfish);
++    object_class_property_set_description(oc, "goldfish",
++                                          "Set on to add Android goldfish "
++                                          "framebuffer, events and battery "
++                                          "devices (for ranchu kernels)");
++
+     object_class_property_add_bool(oc, "dtb-randomness",
+                                    virt_get_dtb_randomness,
+                                    virt_set_dtb_randomness);
+diff --git a/include/hw/arm/android-goldfish.h b/include/hw/arm/android-goldfish.h
+new file mode 100644
+index 0000000..c1adaa5
+--- /dev/null
++++ b/include/hw/arm/android-goldfish.h
+@@ -0,0 +1,12 @@
++/*
++ * Goldfish platform devices for Android emulator guest kernels on 'virt'.
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++#ifndef HW_ARM_ANDROID_GOLDFISH_H
++#define HW_ARM_ANDROID_GOLDFISH_H
++
++#define TYPE_GOLDFISH_FB      "goldfish-fb"
++#define TYPE_GOLDFISH_EVENTS  "goldfish-events"
++#define TYPE_GOLDFISH_BATTERY "goldfish-battery"
++
++#endif
+diff --git a/include/hw/arm/virt.h b/include/hw/arm/virt.h
+index 22e66d1..f9f381d 100644
+--- a/include/hw/arm/virt.h
++++ b/include/hw/arm/virt.h
+@@ -100,6 +100,9 @@ enum {
+     VIRT_GWDT_WS0,
+     VIRT_GWDT_REFRESH,
+     VIRT_GWDT_CONTROL,
++    VIRT_GOLDFISH_FB,
++    VIRT_GOLDFISH_EVENTS,
++    VIRT_GOLDFISH_BATTERY,
+     VIRT_LOWMEMMAP_LAST,
+ };
+ 
+@@ -177,6 +180,7 @@ struct VirtMachineState {
+     bool ras;
+     bool mte;
+     bool dtb_randomness;
++    bool goldfish;
+     bool second_ns_uart_present;
+     OnOffAuto acpi;
+     VirtGICType gic_version;

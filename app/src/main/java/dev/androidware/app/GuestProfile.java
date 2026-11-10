@@ -11,7 +11,13 @@ import java.nio.charset.StandardCharsets;
 
 /** Per-guest configuration persisted as JSON under files/profiles/. */
 public final class GuestProfile {
+    /** Generic Linux guest: -kernel/-initrd/-drive on virtio-pci. */
+    public static final String KIND_LINUX = "linux";
+    /** Android emulator image with a "ranchu" kernel: goldfish devices, virtio-mmio disks data/cache/system. */
+    public static final String KIND_ANDROID_RANCHU = "android-ranchu";
+
     public String name = "default";
+    public String kind = KIND_LINUX;
     public String machine = "virt";
     public String cpu = "cortex-a57";   // has AArch32 EL0 in QEMU's model -> 32-bit guest userspace works
     public int smp = 2;
@@ -24,6 +30,8 @@ public final class GuestProfile {
     public boolean virtioGpu = false;    // needs guest driver; off for the serial-console smoke test
     public int displayWidth = 1280;
     public int displayHeight = 720;
+    public int displayDpi = 240;
+    public String androidSystem, androidCache, androidData;   // KIND_ANDROID_RANCHU only
 
     public static File dir(File filesDir) { File d = new File(filesDir, "profiles"); d.mkdirs(); return d; }
 
@@ -48,6 +56,11 @@ public final class GuestProfile {
             p.virtioGpu = o.optBoolean("virtioGpu", false);
             p.displayWidth = o.optInt("displayWidth", p.displayWidth);
             p.displayHeight = o.optInt("displayHeight", p.displayHeight);
+            p.displayDpi = o.optInt("displayDpi", p.displayDpi);
+            p.kind = o.optString("kind", p.kind);
+            p.androidSystem = o.optString("androidSystem", null);
+            p.androidCache = o.optString("androidCache", null);
+            p.androidData = o.optString("androidData", null);
         } catch (IOException | JSONException e) {
             // fall through with defaults
         }
@@ -60,7 +73,9 @@ public final class GuestProfile {
             o.put("machine", machine).put("cpu", cpu).put("smp", smp).put("memMb", memMb)
              .put("kernel", kernel).put("initrd", initrd).put("disk", disk).put("cmdline", cmdline)
              .put("network", network).put("virtioGpu", virtioGpu)
-             .put("displayWidth", displayWidth).put("displayHeight", displayHeight);
+             .put("displayWidth", displayWidth).put("displayHeight", displayHeight).put("displayDpi", displayDpi)
+             .put("kind", kind).put("androidSystem", androidSystem).put("androidCache", androidCache)
+             .put("androidData", androidData);
         } catch (JSONException e) { throw new IOException(e); }
         File f = new File(dir(filesDir), name + ".json");
         String text;
