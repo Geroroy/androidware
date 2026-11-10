@@ -7,7 +7,7 @@
     <string name="btn_import_kernel">Import kernel</string>
     <string name="btn_import_initrd">Import initrd</string>
     <string name="btn_import_disk">Import disk image</string>
-    <string name="btn_inspect_apk">Import game APK</string>
+    <string name="btn_inspect_apk">Import game APK / OBB</string>
     <string name="btn_start">Start guest</string>
     <string name="btn_stop">Stop guest</string>
     <string name="btn_android_get">Android 7 guest…</string>

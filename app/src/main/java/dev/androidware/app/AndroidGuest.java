@@ -97,7 +97,71 @@ public final class AndroidGuest {
             }
         }
         GuestMedia.writeTransferDisk(new File(d, "transfer.img"), apks);
+        // Game data (OBB): one FAT32 image, rebuilt only when the imported files change.
+        java.util.List<GuestMedia.DataFile> data = new java.util.ArrayList<>();
+        StringBuilder manifest = new StringBuilder();
+        File[] pkgs = gameDataDir(ctx).listFiles();
+        if (pkgs != null) for (File pd : pkgs) {
+            File[] fs = pd.isDirectory() ? pd.listFiles() : null;
+            if (fs != null) for (File f : fs) {
+                if (!f.isFile() || f.getName().endsWith(".part")) continue;
+                data.add(new GuestMedia.DataFile(pd.getName(), f.getName(), f));
+                manifest.append(pd.getName()).append('/').append(f.getName()).append(' ').append(f.length()).append(' ').append(f.lastModified()).append('\n');
+            }
+        }
+        File img = new File(d, "obb.img"), mf = new File(d, "obb.manifest");
+        if (data.isEmpty()) { img.delete(); mf.delete(); }
+        else {
+            String old = mf.isFile() ? new String(java.nio.file.Files.readAllBytes(mf.toPath()), java.nio.charset.StandardCharsets.UTF_8) : "";
+            if (!img.isFile() || !old.equals(manifest.toString())) {
+                mf.delete();
+                GuestMedia.writeFatImage(img, data);
+                try (OutputStream o = new FileOutputStream(mf)) { o.write(manifest.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8)); }
+            }
+            sb.append("\n  game data: ").append(manifest.toString().trim().replace("\n", "; "));
+        }
         return apks.isEmpty() ? "no game APK imported" : sb.toString().trim();
+    }
+
+    /** Imported game data: files/gamedata/<package>/<file>, shown to the guest as /sdcard/Android/obb/<package>/<file>. */
+    public static File gameDataDir(Context ctx) { File d = new File(ctx.getFilesDir(), "gamedata"); d.mkdirs(); return d; }
+
+    private static final java.util.regex.Pattern OBB_NAME = java.util.regex.Pattern.compile("(main|patch)\\.\\d+\\.([A-Za-z0-9._]+)\\.obb");
+
+    /**
+     * Imports game data from a .obb file or a zip that contains .obb files (any folder layout).
+     * The package is taken from the standard OBB file name "main.<version>.<package>.obb".
+     * Returns a description of what was imported.
+     */
+    public static String importGameData(Context ctx, InputStream in, String displayName, Progress p) throws IOException {
+        StringBuilder sb = new StringBuilder();
+        if (displayName.toLowerCase(java.util.Locale.US).endsWith(".obb")) {
+            sb.append(saveObb(ctx, in, displayName, -1, p));
+        } else {
+            try (ZipInputStream z = new ZipInputStream(in)) {
+                ZipEntry e;
+                while ((e = z.getNextEntry()) != null) {
+                    String base = e.getName().substring(e.getName().lastIndexOf('/') + 1);
+                    if (e.isDirectory() || !base.toLowerCase(java.util.Locale.US).endsWith(".obb")) continue;
+                    sb.append(saveObb(ctx, z, base, e.getSize(), p)).append(' ');
+                }
+            }
+        }
+        if (sb.length() == 0) throw new IOException("no .obb file found in " + displayName);
+        return sb.toString().trim();
+    }
+
+    private static String saveObb(Context ctx, InputStream in, String name, long size, Progress p) throws IOException {
+        java.util.regex.Matcher m = OBB_NAME.matcher(name);
+        if (!m.matches()) throw new IOException("not a standard OBB file name (main.<version>.<package>.obb): " + name);
+        File dir = new File(gameDataDir(ctx), m.group(2));
+        if (!dir.isDirectory() && !dir.mkdirs()) throw new IOException("cannot create " + dir);
+        File tmp = new File(dir, name + ".part"), dst = new File(dir, name);
+        try (OutputStream out = new FileOutputStream(tmp)) { copy(in, out, name, size, p); }
+        if (size >= 0 && tmp.length() != size) { tmp.delete(); throw new IOException("truncated: " + name); }
+        if (dst.exists() && !dst.delete()) throw new IOException("cannot replace " + dst);
+        if (!tmp.renameTo(dst)) throw new IOException("rename failed: " + tmp);
+        return m.group(2) + "/" + name + " (" + dst.length() + " bytes)";
     }
 
     /** OpenGL ES version the APK's manifest requires (0x00020000 = 2.0), or 0 if it does not say. */
@@ -221,6 +285,7 @@ public final class AndroidGuest {
         if (new File(d, "sdcard.img").isFile() && new File(d, "transfer.img").isFile()) {
             g.androidSdcard = new File(d, "sdcard.img").getAbsolutePath();
             g.androidTransfer = new File(d, "transfer.img").getAbsolutePath();
+            if (new File(d, "obb.img").isFile()) g.androidObb = new File(d, "obb.img").getAbsolutePath();
         }
         // qemu.gles=0: guest software GLES (libGLES_android) until the virgl path exists.
         boolean gpu = hostGpu(ctx);

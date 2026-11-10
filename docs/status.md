@@ -30,6 +30,16 @@
 - 해석(추정, APK 미확보로 미검증): 두 크래시 모두 **게임 추가 데이터(OBB/다운로드 리소스)가 게스트에 없는 것**과 맞는다. 게스트는 네트워크가 꺼져 있고, /data는 550 MB(140,800 블록)라 약 2 GB 데이터를 받을 공간도 없다. VM/GL 문제로 볼 근거는 현재 없음(`eglGetConfigAttrib … EGL_BAD_ATTRIBUTE` 3회는 미지원 속성 조회로, 크래시 지점과 무관).
 - 필요한 것: 게임 데이터 전달 경로(OBB 가져오기 → 게스트 `/sdcard/Android/obb/<패키지>/`)와 큰 저장 공간. 사용자가 가진 데이터 형태 확인 후 진행.
 
+### 게임 데이터(OBB) 전달 경로 추가 (앱 0.0.12-m1)
+
+사용자 보유 데이터: `N-O-V-A-3-Freedom-Edition-v1-0-1d-cache.zip`(1,430,437,882 B, 파일 2개, 풀면 1,687,430,360 B).
+
+- 앱: "Import game APK / OBB"에서 `.obb` 또는 zip을 고르면 zip 안의 `.obb`를 `files/gamedata/<패키지>/`로 푼다(패키지는 표준 이름 `main|patch.<버전>.<패키지>.obb`에서 얻음). Start Android 때 `GuestMedia.writeFatImage`가 FAT32 이미지 `obb.img`를 만든다(4 KiB 클러스터, LFN, 파일 연속 배치, 파일 목록이 바뀔 때만 재생성).
+- 엔진 명령행: `obb.img`를 맨 먼저 만든 virtio-blk로 추가 → 게스트 `/dev/block/vdf`.
+- 게스트: `aw-install.sh`가 설치·실행 전에 `mount -t vfat -o uid=1023,gid=1023,… /dev/block/vdf /data/media/obb`. Android 7 저장소 데몬이 `Android/obb`를 `/data/media/obb`로 연결하므로 앱에는 `/sdcard/Android/obb/<패키지>/`로 보인다. /data(550 MB)를 키울 필요가 없다.
+- PC 검증: `fsck.fat` 통과(200 MB + 5 MB 임의 파일), 게스트에서 `androidware: game data mounted`, `/storage/emulated/0/Android/obb/<패키지>/` 경유 md5 일치, 소유 앱 uid(`u0_a60`)로 목록·읽기 성공, 다른 앱 uid는 거부(정상). 앱 쪽 zip 풀기(SAF 스트림)와 1.6 GB 크기는 기기에서만 확인 가능(미검증).
+- 미확인: 게임이 OBB 외 추가 다운로드를 요구하는지, zip 안 파일 이름이 표준 OBB 이름인지(아니면 가져오기가 이름을 알려 주며 실패).
+
 (이전 계획) 사용자가 0.0.10-m1로 다시 실행 → `graphics:` 줄과 `[guest] awcrash:` 내용으로 원인 확정.
 
 ## 세션 4 요약 (2026-11-10) — 호스트 GPU GLES 2.0 경로 (앱 0.0.9-m1, 실험적)
@@ -76,7 +86,7 @@ PC 결과: GPU 모드 부팅 96~97초, SurfaceFlinger·런처·Settings가 호�
 2. **검은방 1 실제 실행 확인** — 게임 APK로 해 봐야 아는 것: SKT ARM DRM 서비스 바인딩 실패 시 동작, `READ_PHONE_STATE`(게스트에 모뎀/RIL 없음 → 기기 ID가 null일 수 있음), 화면/터치/소리.
 3. **기기 검증** — 0.0.7-m1 전체 절차(`docs/device-test-procedure.md` M1).
 4. 오디오 지연: 장치 쪽 큐 최대 약 190 ms + AudioTrack 버퍼. 체감 확인 후 조정.
-5. OBB/추가 데이터가 있는 게임의 데이터 전달 경로(SD 카드 이미지에 쓰는 기능) 없음. 검은방 1은 필요 없음.
+5. (세션 5에서 해결) OBB 데이터 전달 경로: 앱 0.0.12-m1.
 
 ---
 

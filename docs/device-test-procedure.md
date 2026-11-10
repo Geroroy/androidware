@@ -24,9 +24,9 @@
 ## 다음 단계로 넘어가는 조건
 - 32비트 바이너리의 `fp_ms`가 PC 실험 대비 어떤 비율인지 기록(기기 TCG 백엔드 성능의 첫 지표).
 
-## M1: Android 7.0 게스트 + 게임 (앱 0.0.11-m1)
+## M1: Android 7.0 게스트 + 게임 (앱 0.0.12-m1)
 
-준비: `adb install -r dist/androidware-0.0.11-m1.apk`(서명 키가 바뀌었으면 먼저 `adb uninstall dev.androidware.app`). 기기에 약 3 GB 여유 공간.
+준비: `adb install -r dist/androidware-0.0.12-m1.apk`(서명 키가 바뀌었으면 먼저 `adb uninstall dev.androidware.app`). 기기에 약 3 GB 여유 공간.
 
 | 단계 | 조작 | 기대 결과 | 기록할 것 |
 |---|---|---|---|
@@ -49,6 +49,7 @@
 | G1 | 게스트가 꺼진 상태에서 **Import game APK** → 게임 APK 선택 | APK 분석 출력 뒤 `game <패키지> registered: ...` | 분석 출력 |
 | G2 | **Start Android** | 로그 `guest games: <패키지> (auto-start)`. 홈 화면이 뜬 뒤 수십 초 안에 게임이 자동으로 뜬다(첫 부팅에서만 설치, 이후 부팅은 실행만) | 홈 화면 시각, 게임 화면 시각 |
 | G3 | 게임 조작 | 터치 반응, 소리 | 타이틀 진입 / 실제 플레이 여부, 소리 유무·지연, 멈춤 여부 |
+| G2b | (OBB가 있는 게임) **Import game APK / OBB** → `.obb` 또는 `.obb`가 든 zip 선택 | `game data imported: <패키지>/main.….obb (… bytes)`. 다음 Start Android에서 `guest games:` 아래 `game data:` 줄, 부팅 뒤 `[guest] androidware: game data mounted: <패키지>` | 로그 |
 | G3b | 게임이 "has stopped"로 죽으면 | 앱 로그 화면에 `[guest] awcrash: …` 줄(Java `FATAL EXCEPTION` 또는 네이티브 `F/DEBUG` backtrace). Start Android 직후 `graphics:` 줄과 GLES 경고도 확인 | Export log 파일 |
 | G4 | **Stop guest** → **Export log** | `serial.log`에 `androidware: install <패키지>: Success`(또는 실패 사유), `androidware: starting <패키지>` | 로그 파일 |
 

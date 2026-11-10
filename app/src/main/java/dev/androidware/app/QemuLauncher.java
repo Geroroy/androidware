@@ -55,6 +55,10 @@ public final class QemuLauncher {
             // and fstab.ranchu expects vda=system, vdb=cache, vdc=data, vdd=SD card. vde = APK transfer disk
             // read by /aw-install.sh (GuestMedia). vde needs vdd, so both or neither.
             if (p.androidSdcard != null && p.androidTransfer != null) {
+                if (p.androidObb != null) {   // created first = last name: vdf (game data, see GuestMedia.writeFatImage)
+                    a.add("-drive"); a.add("if=none,id=obb,file=" + p.androidObb + ",format=raw,cache=writeback");
+                    a.add("-device"); a.add("virtio-blk-device,drive=obb");
+                }
                 a.add("-drive"); a.add("if=none,id=xfer,file=" + p.androidTransfer + ",format=raw,readonly=on");
                 a.add("-device"); a.add("virtio-blk-device,drive=xfer");
                 a.add("-drive"); a.add("if=none,id=sd,file=" + p.androidSdcard + ",format=raw,cache=writeback");

@@ -98,7 +98,7 @@ public class MainActivity extends Activity implements EngineService.LogListener,
             startActivityForResult(i, REQ_EXPORT);
         });
 
-        log("androidware 0.0.11-m1; profile=" + profile.name + " kernel=" + profile.kernel + " initrd=" + profile.initrd + " disk=" + profile.disk);
+        log("androidware 0.0.12-m1; profile=" + profile.name + " kernel=" + profile.kernel + " initrd=" + profile.initrd + " disk=" + profile.disk);
         Intent svc = new Intent(this, EngineService.class);
         bindService(svc, conn, Context.BIND_AUTO_CREATE);
     }
@@ -126,6 +126,18 @@ public class MainActivity extends Activity implements EngineService.LogListener,
         }
         String name = ImportManager.displayName(this, uri);
         long size = ImportManager.size(this, uri);
+        String lower = name.toLowerCase(Locale.US);
+        if (req == REQ_APK && (lower.endsWith(".obb") || lower.endsWith(".zip"))) {
+            log("importing game data from " + name + " (" + size + " bytes); this can take a few minutes...");
+            io.execute(() -> {
+                try (java.io.InputStream in = getContentResolver().openInputStream(uri)) {
+                    if (in == null) throw new IOException("cannot open " + uri);
+                    log("game data imported: " + AndroidGuest.importGameData(this, new java.io.BufferedInputStream(in, 1 << 16), name, this::progress)
+                            + "\n  it appears in the guest as /sdcard/Android/obb/<package>/ on the next \"Start Android\"");
+                } catch (IOException e) { log("game data import failed: " + e); }
+            });
+            return;
+        }
         log("importing " + name + " (" + size + " bytes)...");
         io.execute(() -> {
             try {
