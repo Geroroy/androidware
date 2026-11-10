@@ -127,6 +127,8 @@ public class EngineService extends Service {
         QemuLauncher.vncSocket(ctx).delete();
         //noinspection ResultOfMethodCallIgnored
         QemuLauncher.qmpSocket(ctx).delete();
+        //noinspection ResultOfMethodCallIgnored
+        QemuLauncher.audioSocket(ctx).delete();
     }
 
     private void emit(String line) { for (LogListener l : listeners) l.onLine(line); }

@@ -37,7 +37,12 @@ class VM:
         s.qcmd('input-send-event', events=[{'type':'key','data':{'key':{'type':'qcode','data':qcode},'down':True}}]); time.sleep(hold)
         s.qcmd('input-send-event', events=[{'type':'key','data':{'key':{'type':'qcode','data':qcode},'down':False}}])
     def shot(s, png):
-        ppm=png+'.ppm'; r=s.qcmd('screendump', filename=ppm)
+        ppm=png+'.ppm'
+        try: r=s.qcmd('screendump', filename=ppm)
+        except Exception as e:
+            try: rc=s.p.wait(5)
+            except Exception: rc='still running'
+            raise RuntimeError(f'QEMU went away during screendump (exit status {rc}; 0 = guest reset/poweroff with -no-reboot, negative = signal)') from e
         from PIL import Image
         Image.open(ppm).save(png); os.unlink(ppm); return png
     def _rd(s):

@@ -45,6 +45,55 @@ public final class AndroidGuest {
         return new File(dir(ctx), "cache.img").isFile();
     }
 
+    /** Imported game APKs: files/games/<package>.apk. The file named in files/games/launch.txt is started after boot. */
+    public static File launchFile(Context ctx) { return new File(ImportManager.gamesDir(ctx), "launch.txt"); }
+
+    /**
+     * Registers an imported APK as a guest game: renames it to <package>.apk and marks it to be
+     * started after the next boot. Returns the package name, or null if the APK cannot be parsed.
+     */
+    public static String registerGame(Context ctx, File apk) throws IOException {
+        android.content.pm.PackageInfo pi = ctx.getPackageManager().getPackageArchiveInfo(apk.getAbsolutePath(), 0);
+        if (pi == null || pi.packageName == null || !pi.packageName.matches("[A-Za-z0-9._]+")) return null;
+        File dst = new File(ImportManager.gamesDir(ctx), pi.packageName + ".apk");
+        if (!apk.equals(dst)) {
+            dst.delete();
+            if (!apk.renameTo(dst)) throw new IOException("rename failed: " + apk);
+        }
+        try (OutputStream o = new FileOutputStream(launchFile(ctx))) { o.write(pi.packageName.getBytes(java.nio.charset.StandardCharsets.UTF_8)); }
+        return pi.packageName;
+    }
+
+    /**
+     * Prepares the per-boot media: overlay ramdisk (auto-install service), SD card image (created
+     * once, kept across factory resets) and the transfer disk with every imported game APK.
+     * Returns a description of what will be installed/started.
+     */
+    public static String prepareBoot(Context ctx) throws IOException {
+        File d = dir(ctx);
+        GuestMedia.buildRamdisk(new File(d, "ramdisk.img"), new File(d, "ramdisk-aw.img"));
+        File sd = new File(d, "sdcard.img");
+        if (!sd.isFile()) {
+            try (InputStream in = ctx.getAssets().open("androidguest/sdcard.img.gz")) { GuestMedia.extractSparseGz(in, sd); }
+        }
+        String launch = null;
+        File lf = launchFile(ctx);
+        if (lf.isFile()) launch = new String(java.nio.file.Files.readAllBytes(lf.toPath()), java.nio.charset.StandardCharsets.UTF_8).trim();
+        java.util.List<GuestMedia.Apk> apks = new java.util.ArrayList<>();
+        StringBuilder sb = new StringBuilder();
+        File[] files = ImportManager.gamesDir(ctx).listFiles();
+        if (files != null) for (File f : files) {
+            if (!f.getName().endsWith(".apk")) continue;
+            String pkg = f.getName().substring(0, f.getName().length() - 4);
+            if (!pkg.matches("[A-Za-z0-9._]+")) continue;
+            boolean l = pkg.equals(launch);
+            apks.add(new GuestMedia.Apk(f, pkg, l));
+            sb.append(pkg).append(l ? " (auto-start)" : "").append(' ');
+        }
+        GuestMedia.writeTransferDisk(new File(d, "transfer.img"), apks);
+        return apks.isEmpty() ? "no game APK imported" : sb.toString().trim();
+    }
+
     /** Downloads the official zip from dl.google.com, verifying size and SHA-1, then installs it. */
     public static void download(Context ctx, Progress p) throws IOException {
         File zip = new File(ctx.getCacheDir(), "armeabi-v7a-24_r07.zip");
@@ -123,10 +172,14 @@ public final class AndroidGuest {
         g.smp = 2;   // PC (4 host cores): smp 2 booted in 75-85 s, smp 4 in 142-150 s; re-measure on device
         g.memMb = 1024;
         g.kernel = new File(d, "kernel-ranchu").getAbsolutePath();
-        g.initrd = new File(d, "ramdisk.img").getAbsolutePath();
+        g.initrd = new File(d, new File(d, "ramdisk-aw.img").isFile() ? "ramdisk-aw.img" : "ramdisk.img").getAbsolutePath();
         g.androidSystem = new File(d, "system.img").getAbsolutePath();
         g.androidCache = new File(d, "cache.img").getAbsolutePath();
         g.androidData = new File(d, "userdata.img").getAbsolutePath();
+        if (new File(d, "sdcard.img").isFile() && new File(d, "transfer.img").isFile()) {
+            g.androidSdcard = new File(d, "sdcard.img").getAbsolutePath();
+            g.androidTransfer = new File(d, "transfer.img").getAbsolutePath();
+        }
         // qemu.gles=0: guest software GLES (libGLES_android) until the virgl path exists.
         g.cmdline = "console=ttyAMA0 androidboot.console=ttyAMA0 androidboot.hardware=ranchu qemu=1 qemu.gles=0 "
                 + "androidboot.selinux=permissive";

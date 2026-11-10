@@ -38,6 +38,7 @@ public class MainActivity extends Activity implements EngineService.LogListener,
     private TextView logView;
     private ScrollView logScroll;
     private VncView vnc;
+    private static final AudioPlayer audio = new AudioPlayer();   // static: keeps playing across activity recreation
     // static: the on-screen log survives activity recreation (rotation)
     private static final ArrayDeque<String> lines = new ArrayDeque<>();
     private final Handler ui = new Handler(Looper.getMainLooper());
@@ -83,7 +84,7 @@ public class MainActivity extends Activity implements EngineService.LogListener,
             startActivityForResult(i, REQ_EXPORT);
         });
 
-        log("androidware 0.0.6-m1; profile=" + profile.name + " kernel=" + profile.kernel + " initrd=" + profile.initrd + " disk=" + profile.disk);
+        log("androidware 0.0.7-m1; profile=" + profile.name + " kernel=" + profile.kernel + " initrd=" + profile.initrd + " disk=" + profile.disk);
         Intent svc = new Intent(this, EngineService.class);
         bindService(svc, conn, Context.BIND_AUTO_CREATE);
     }
@@ -120,7 +121,13 @@ public class MainActivity extends Activity implements EngineService.LogListener,
                     case REQ_KERNEL: profile.kernel = f.getAbsolutePath(); break;
                     case REQ_INITRD: profile.initrd = f.getAbsolutePath(); break;
                     case REQ_DISK: profile.disk = f.getAbsolutePath(); break;
-                    case REQ_APK: log(ApkInspector.inspect(this, f)); break;
+                    case REQ_APK: {
+                        log(ApkInspector.inspect(this, f));
+                        String pkg = AndroidGuest.registerGame(this, f);
+                        if (pkg != null) log("game " + pkg + " registered: it is installed and started in the Android guest on the next \"Start Android\"");
+                        else log("this APK could not be parsed; it will not be installed in the guest");
+                        break;
+                    }
                 }
                 profile.save(getFilesDir());
                 log("imported -> " + f);
@@ -199,7 +206,9 @@ public class MainActivity extends Activity implements EngineService.LogListener,
                 log("== Android 7.0 guest: booting (expect a few minutes on TCG) ==");
                 bootStartMs = System.currentTimeMillis();
                 startForegroundService(new Intent(this, EngineService.class));
+                log("guest games: " + AndroidGuest.prepareBoot(this));
                 service.start(AndroidGuest.profile(this));
+                audio.start(QemuLauncher.audioSocket(this));
                 ui.post(() -> vnc.connect(QemuLauncher.vncSocket(this)));
             } catch (IOException e) { log("start failed: " + e); }
         });
@@ -225,6 +234,7 @@ public class MainActivity extends Activity implements EngineService.LogListener,
 
     private void stopGuest() {
         vnc.disconnect();
+        audio.stop();
         if (service != null) io.execute(() -> { service.stop(); log("stop requested"); });
     }
 
@@ -258,6 +268,7 @@ public class MainActivity extends Activity implements EngineService.LogListener,
     @Override public void onLine(String line) { log(line); }
     @Override public void onExit(int code) {
         ui.post(() -> vnc.disconnect());
+        audio.stop();
         if (bootStartMs != 0) { log("guest ran for " + (System.currentTimeMillis() - bootStartMs) + " ms wall"); bootStartMs = 0; }
         // Show what the guest printed on its serial console (last 40 lines).
         try {

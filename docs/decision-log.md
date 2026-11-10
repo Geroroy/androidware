@@ -16,3 +16,5 @@
 | D12 | 2026-11-10 | ranchu 커널용 **goldfish 장치(fb, events, battery)를 엔진에 추가**(패치 0024, `-M virt,goldfish=on`). 게스트 CPU는 `cortex-a15` | 3.10 커널에 virtio-input/virtio-gpu/USB/PCI가 없어 입력은 goldfish_events뿐; 장치 3개 약 700줄, 업스트림 장치 모델과 분리된 선택 기능 | 게스트를 virtio 계열 커널로 바꾸면 제거 |
 | D13 | 2026-11-10 | 게스트 이미지는 APK에 넣지 않고 **앱이 dl.google.com에서 공식 zip을 받아(SHA-1 검증) 앱 저장소에 푼다**(또는 같은 zip을 가져오기) | Android SDK 라이선스 이미지의 재배포 회피; 사용자 조작 1회 | 자체 빌드 이미지(오픈소스)로 바꾸면 번들 검토 |
 | D14 | 2026-11-10 | NDK r29 / build-tools 35 / platform 35를 **dl.google.com 공식 배포본**으로 전환(D10의 Docker Hub 추출 대체) | 이번 세션에서 접근 가능, SHA-1 검증 | — |
+| D15 | 2026-11-10 | 게임 APK는 **전달 디스크(게스트 vde, 단순 블록 형식) + 램디스크 오버레이의 설치 서비스**로 게스트에 넣는다. 램디스크는 원본 뒤에 cpio를 덧붙여(커널이 순서대로 풀어 덮어씀) 앱이 매 부팅 전에 만든다 | 게스트 네트워크·adb 없음; Android에서 ext4 이미지를 직접 고칠 도구 없음; Google 이미지 파일을 수정본으로 재배포하지 않음 | 게스트 네트워크+adb 경로가 생기면 대체 가능 |
+| D16 | 2026-11-10 | 오디오는 QEMU 오디오 서브시스템 대신 **goldfish-audio 장치 → chardev(유닉스 소켓) → 앱 AudioTrack** | 엔진을 오디오 백엔드 없이 빌드(`--audio-drv-list=`)한 상태 유지, AAudio 백엔드 작성 불필요, PC에서 파일로 검증 가능 | 지연이 크면 엔진 내 AAudio 백엔드 |

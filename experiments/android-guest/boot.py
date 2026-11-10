@@ -12,11 +12,19 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from vm import VM
 wd, tag = os.path.abspath(sys.argv[1]), sys.argv[2]
 qemu = os.environ.get('QEMU', 'qemu-system-aarch64')
+# FULL=1: what the app does since 0.0.7 -- overlay ramdisk (auto-install), transfer disk (vde), SD card (vdd), audio
+full = []
+if os.environ.get('FULL'):
+    os.environ.setdefault('RAMDISK', 'ramdisk-aw.img')
+    full = ['-drive', f'if=none,id=xfer,file={wd}/transfer.img,format=raw,readonly=on', '-device', 'virtio-blk-device,drive=xfer',
+            '-drive', f'if=none,id=sd,file={wd}/sdcard.img,format=raw', '-device', 'virtio-blk-device,drive=sd',
+            '-chardev', f'file,id=aud,path={wd}/audio.raw', '-global', 'goldfish-audio.chardev=aud']
 args = [qemu, '-M', 'virt,highmem=off,goldfish=on', '-cpu', 'cortex-a15', '-smp', os.environ.get('SMP', '4'),
         '-m', '1024', '-accel', 'tcg,thread=multi', '-no-reboot',
-        '-kernel', f'{wd}/kernel-ranchu', '-initrd', f'{wd}/ramdisk.img',
+        '-kernel', f'{wd}/kernel-ranchu', '-initrd', f"{wd}/{os.environ.get('RAMDISK', 'ramdisk.img')}",
         '-append', 'console=ttyAMA0 androidboot.console=ttyAMA0 androidboot.hardware=ranchu qemu=1 qemu.gles=0 '
                    'androidboot.selinux=permissive ' + os.environ.get('EXTRA_APPEND', ''),
+        *full,
         '-drive', f'if=none,id=data,file={wd}/userdata.img,format=raw', '-device', 'virtio-blk-device,drive=data',
         '-drive', f'if=none,id=cache,file={wd}/cache.img,format=raw', '-device', 'virtio-blk-device,drive=cache',
         '-drive', f'if=none,id=system,file={wd}/system.img,format=raw,readonly=on', '-device', 'virtio-blk-device,drive=system',
@@ -38,7 +46,14 @@ vm.shot(f'{wd}/{tag}-1-home.png')
 vm.sh('am start -a android.settings.SETTINGS', 30); time.sleep(15); vm.shot(f'{wd}/{tag}-2-settings.png')
 vm.tap(240, 400); time.sleep(10); vm.shot(f'{wd}/{tag}-3-tap.png')
 vm.key('esc'); time.sleep(8); vm.shot(f'{wd}/{tag}-4-back.png')
-if apk:
+if os.environ.get('FULL'):
+    time.sleep(60)
+    print(vm.sh('su 0 dmesg | grep androidware:; ls /storage; ls -l /sdcard/; df | grep -E "storage|media"; ls -l /dev/eac', 60))
+    vm.shot(f'{wd}/{tag}-5-autostart.png')
+    vm.sh('am start -a android.intent.action.VIEW -d file:///system/media/audio/ringtones/Andromeda.ogg -t audio/ogg', 60)
+    time.sleep(25); vm.shot(f'{wd}/{tag}-6-audio.png')
+    print(vm.sh('su 0 logcat -d -s gles1test:* | tail -5; echo x > /sdcard/aw-test.txt; ls -l /sdcard/aw-test.txt; grep -i gold /proc/interrupts', 60))
+elif apk:
     t1 = time.time()
     print(vm.sh('su 0 chmod 644 /data/androidware-test.apk; pm install -r /data/androidware-test.apk', 300).strip().splitlines()[-1:],
           'install %.1fs' % (time.time() - t1))

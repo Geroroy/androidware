@@ -6,8 +6,9 @@
 
 ## 업데이트 (2026-11-10, 세션 2)
 - 게스트 Android: Google 공식 **Android 7.0 ARMv7 에뮬레이터 이미지**(전부 32비트)를 QEMU `virt`에서 부팅. 엔진 패치 0024로 goldfish 화면·터치·배터리 장치 추가. PC에서 홈 화면까지 75~85초, 터치·키 동작, 32비트 GLES 1.x 테스트 앱 실행 확인(`experiments/android-guest/RESULTS.md`).
-- 앱 0.0.6-m1: "Android 7 guest…"(공식 이미지 다운로드/가져오기) + "Start Android". 기기 실행은 미검증.
-- 남은 핵심 과제: GLES 2.0(N.O.V.A. 3) 경로, 게임 APK를 게스트에 넣는 경로, 오디오.
+- 앱: "Android 7 guest…"(공식 이미지 다운로드/가져오기) + "Start Android".
+- (세션 3) 앱 0.0.7-m1: **Import game APK** → **Start Android**만으로 게임이 게스트에 설치·실행된다(PC 불필요). 오디오(goldfish-audio → 앱 AudioTrack), SD 카드 추가, 간헐적 엔진 크래시 수정. PC 검증만 했고 기기·실제 게임은 미검증.
+- 남은 핵심 과제: GLES 2.0(N.O.V.A. 3) 경로, 검은방 실제 실행 확인(DRM/전화 상태).
 
 ## 한 줄 결론 (2026-11-05)
 - 대상 기기는 32비트 ARM 코드를 하드웨어로 실행하지 못한다(Samsung 공식). 모든 경로에 소프트웨어 명령어 번역이 필요하다.

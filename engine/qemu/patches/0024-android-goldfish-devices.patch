@@ -12,10 +12,10 @@ index 6f5b2ad..efea378 100644
      bool
 diff --git a/hw/arm/android-goldfish.c b/hw/arm/android-goldfish.c
 new file mode 100644
-index 0000000..496539c
+index 0000000..e7afa43
 --- /dev/null
 +++ b/hw/arm/android-goldfish.c
-@@ -0,0 +1,683 @@
+@@ -0,0 +1,849 @@
 +/*
 + * Minimal "goldfish" platform devices for running Android emulator (ranchu)
 + * guest kernels on the upstream 'virt' machine.
@@ -23,10 +23,13 @@ index 0000000..496539c
 + *   goldfish-fb       framebuffer (generic,goldfish-fb), scanned out from guest RAM
 + *   goldfish-events   input (generic,goldfish-events-keypad): keys + multi-touch
 + *   goldfish-battery  battery/AC status (generic,goldfish-battery), always full on AC
++ *   goldfish-audio    PCM output (generic,goldfish-audio): 44.1 kHz stereo s16le, written
++ *                     raw to a chardev (the host app plays it); paced in guest time
 + *
 + * The register interfaces follow the guest drivers in the Android goldfish
 + * kernels (drivers/video/goldfishfb.c, drivers/input/keyboard/goldfish_events.c,
-+ * drivers/power/goldfish_battery.c). Written for androidware.
++ * drivers/power/goldfish_battery.c, drivers/staging/goldfish/goldfish_audio.c).
++ * Written for androidware.
 + *
 + * SPDX-License-Identifier: GPL-2.0-or-later
 + */
@@ -41,6 +44,9 @@ index 0000000..496539c
 +#include "migration/vmstate.h"
 +#include "system/address-spaces.h"
 +#include "ui/console.h"
++#include "qemu/timer.h"
++#include "chardev/char-fe.h"
++#include "hw/core/qdev-properties-system.h"
 +#include "ui/input.h"
 +#include "ui/pixel_ops.h"
 +#include "standard-headers/linux/input.h"
@@ -127,7 +133,7 @@ index 0000000..496539c
 +        framebuffer_update_memory_section(&s->fbsection, get_system_memory(),
 +                                          s->base, s->height, src_width);
 +    }
-+    first = -1;
++    first = 0;   /* in: first row to draw; out: first row drawn, or -1 */
 +    framebuffer_update_display(surface, &s->fbsection, s->width, s->height,
 +                               src_width, surface_stride(surface), 0,
 +                               s->invalidate, goldfish_fb_draw_line, s,
@@ -679,6 +685,161 @@ index 0000000..496539c
 +    dc->realize = goldfish_battery_realize;
 +}
 +
++/* ------------------------------------------------------------------------ */
++/* goldfish-audio                                                           */
++
++enum {
++    AUDIO_INT_STATUS         = 0x00,
++    AUDIO_INT_ENABLE         = 0x04,
++    AUDIO_SET_WRITE_BUFFER_1 = 0x08,
++    AUDIO_SET_WRITE_BUFFER_2 = 0x0c,
++    AUDIO_WRITE_BUFFER_1     = 0x10,
++    AUDIO_WRITE_BUFFER_2     = 0x14,
++    AUDIO_READ_SUPPORTED     = 0x18,
++};
++#define AUDIO_BUFFER_SIZE   16384
++#define AUDIO_BYTES_PER_SEC (44100 * 2 * 2)
++
++OBJECT_DECLARE_SIMPLE_TYPE(GoldfishAudioState, GOLDFISH_AUDIO)
++
++struct GoldfishAudioState {
++    SysBusDevice parent_obj;
++    MemoryRegion iomem;
++    qemu_irq irq;
++    CharFrontend chr;
++    QEMUTimer *timer[2];
++    uint32_t int_status, int_enable;
++    uint32_t buf_addr[2];
++    int64_t play_end_ns;        /* guest time at which queued audio ends */
++};
++
++static void goldfish_audio_update_irq(GoldfishAudioState *s)
++{
++    qemu_set_irq(s->irq, (s->int_status & s->int_enable) != 0);
++}
++
++static void goldfish_audio_buffer_empty(GoldfishAudioState *s, int n)
++{
++    s->int_status |= 1u << n;
++    goldfish_audio_update_irq(s);
++}
++
++static void goldfish_audio_timer0(void *opaque)
++{
++    goldfish_audio_buffer_empty(opaque, 0);
++}
++
++static void goldfish_audio_timer1(void *opaque)
++{
++    goldfish_audio_buffer_empty(opaque, 1);
++}
++
++static void goldfish_audio_play(GoldfishAudioState *s, int n, uint32_t len)
++{
++    uint8_t buf[AUDIO_BUFFER_SIZE];
++    int64_t now = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
++    int64_t start = MAX(now, s->play_end_ns);
++
++    len = MIN(len, AUDIO_BUFFER_SIZE) & ~3u;
++    if (len && qemu_chr_fe_backend_connected(&s->chr)) {
++        address_space_read(&address_space_memory, s->buf_addr[n],
++                           MEMTXATTRS_UNSPECIFIED, buf, len);
++        /* never block the vCPU: drop what the host cannot take, keep frames whole */
++        int done = qemu_chr_fe_write(&s->chr, buf, len);
++        if (done > 0 && (done & 3)) {
++            qemu_chr_fe_write_all(&s->chr, buf + done, 4 - (done & 3));
++        }
++    }
++    s->play_end_ns = start + (int64_t)len * NANOSECONDS_PER_SECOND /
++                     AUDIO_BYTES_PER_SEC;
++    /* this buffer is free again once the audio queued before it has played */
++    timer_mod(s->timer[n], start);
++}
++
++static uint64_t goldfish_audio_read(void *opaque, hwaddr offset, unsigned size)
++{
++    GoldfishAudioState *s = opaque;
++    uint32_t ret;
++
++    switch (offset) {
++    case AUDIO_INT_STATUS:
++        ret = s->int_status & s->int_enable;
++        s->int_status &= ~ret;
++        goldfish_audio_update_irq(s);
++        return ret;
++    case AUDIO_READ_SUPPORTED:
++    default:
++        return 0;   /* no recording */
++    }
++}
++
++static void goldfish_audio_write(void *opaque, hwaddr offset, uint64_t val,
++                                 unsigned size)
++{
++    GoldfishAudioState *s = opaque;
++
++    switch (offset) {
++    case AUDIO_INT_ENABLE:
++        s->int_enable = val;
++        goldfish_audio_update_irq(s);
++        break;
++    case AUDIO_SET_WRITE_BUFFER_1:
++        s->buf_addr[0] = val;
++        break;
++    case AUDIO_SET_WRITE_BUFFER_2:
++        s->buf_addr[1] = val;
++        break;
++    case AUDIO_WRITE_BUFFER_1:
++        goldfish_audio_play(s, 0, val);
++        break;
++    case AUDIO_WRITE_BUFFER_2:
++        goldfish_audio_play(s, 1, val);
++        break;
++    default:
++        break;      /* read-buffer and 64-bit address registers: unused */
++    }
++}
++
++static const MemoryRegionOps goldfish_audio_ops = {
++    .read = goldfish_audio_read,
++    .write = goldfish_audio_write,
++    .endianness = DEVICE_LITTLE_ENDIAN,
++    .valid = { .min_access_size = 4, .max_access_size = 4 },
++};
++
++static void goldfish_audio_realize(DeviceState *dev, Error **errp)
++{
++    GoldfishAudioState *s = GOLDFISH_AUDIO(dev);
++    memory_region_init_io(&s->iomem, OBJECT(s), &goldfish_audio_ops, s,
++                          "goldfish-audio", 0x1000);
++    sysbus_init_mmio(SYS_BUS_DEVICE(dev), &s->iomem);
++    sysbus_init_irq(SYS_BUS_DEVICE(dev), &s->irq);
++    s->timer[0] = timer_new_ns(QEMU_CLOCK_VIRTUAL, goldfish_audio_timer0, s);
++    s->timer[1] = timer_new_ns(QEMU_CLOCK_VIRTUAL, goldfish_audio_timer1, s);
++}
++
++static void goldfish_audio_reset(DeviceState *dev)
++{
++    GoldfishAudioState *s = GOLDFISH_AUDIO(dev);
++    timer_del(s->timer[0]);
++    timer_del(s->timer[1]);
++    s->int_status = s->int_enable = 0;
++    s->play_end_ns = 0;
++}
++
++static const Property goldfish_audio_properties[] = {
++    DEFINE_PROP_CHR("chardev", GoldfishAudioState, chr),
++};
++
++static void goldfish_audio_class_init(ObjectClass *klass, const void *data)
++{
++    DeviceClass *dc = DEVICE_CLASS(klass);
++    dc->realize = goldfish_audio_realize;
++    device_class_set_legacy_reset(dc, goldfish_audio_reset);
++    device_class_set_props(dc, goldfish_audio_properties);
++    set_bit(DEVICE_CATEGORY_SOUND, dc->categories);
++}
++
 +static const TypeInfo android_goldfish_types[] = {
 +    {
 +        .name = TYPE_GOLDFISH_FB,
@@ -695,6 +856,11 @@ index 0000000..496539c
 +        .parent = TYPE_SYS_BUS_DEVICE,
 +        .instance_size = sizeof(GoldfishBatteryState),
 +        .class_init = goldfish_battery_class_init,
++    }, {
++        .name = TYPE_GOLDFISH_AUDIO,
++        .parent = TYPE_SYS_BUS_DEVICE,
++        .instance_size = sizeof(GoldfishAudioState),
++        .class_init = goldfish_audio_class_init,
 +    },
 +};
 +
@@ -711,7 +877,7 @@ index 4233a80..756df22 100644
  arm_common_ss.add(when: 'CONFIG_DIGIC', if_true: files('digic_boards.c'))
  arm_common_ss.add(when: 'CONFIG_EMCRAFT_SF2', if_true: files('msf2-som.c'))
 diff --git a/hw/arm/virt.c b/hw/arm/virt.c
-index 219597c..dc279ba 100644
+index 219597c..37bb789 100644
 --- a/hw/arm/virt.c
 +++ b/hw/arm/virt.c
 @@ -36,6 +36,7 @@
@@ -722,7 +888,7 @@ index 219597c..dc279ba 100644
  #include "hw/arm/virt.h"
  #include "hw/arm/machines-qom.h"
  #include "hw/block/flash.h"
-@@ -211,6 +212,10 @@ static const MemMapEntry base_memmap[] = {
+@@ -211,6 +212,11 @@ static const MemMapEntry base_memmap[] = {
      [VIRT_PVTIME] =             { 0x090a0000, 0x00010000 },
      [VIRT_SECURE_GPIO] =        { 0x090b0000, 0x00001000 },
      [VIRT_ACPI_PCIHP] =         { 0x090c0000, ACPI_PCIHP_SIZE },
@@ -730,26 +896,29 @@ index 219597c..dc279ba 100644
 +    [VIRT_GOLDFISH_FB] =        { 0x09100000, 0x00001000 },
 +    [VIRT_GOLDFISH_EVENTS] =    { 0x09110000, 0x00001000 },
 +    [VIRT_GOLDFISH_BATTERY] =   { 0x09120000, 0x00001000 },
++    [VIRT_GOLDFISH_AUDIO] =     { 0x09130000, 0x00001000 },
      [VIRT_MMIO] =               { 0x0a000000, 0x00000200 },
      /* ...repeating for a total of NUM_VIRTIO_TRANSPORTS, each of that size */
      [VIRT_PLATFORM_BUS] =       { 0x0c000000, 0x02000000 },
-@@ -268,6 +273,9 @@ static const int a15irqmap[] = {
+@@ -268,6 +274,10 @@ static const int a15irqmap[] = {
      [VIRT_UART1] = 8,
      [VIRT_ACPI_GED] = 9,
      [VIRT_GWDT_WS0] = 10,
 +    [VIRT_GOLDFISH_FB] = 11,
 +    [VIRT_GOLDFISH_EVENTS] = 12,
 +    [VIRT_GOLDFISH_BATTERY] = 13,
++    [VIRT_GOLDFISH_AUDIO] = 14,
      [VIRT_MMIO] = 16, /* ...to 16 + NUM_VIRTIO_TRANSPORTS - 1 */
      [VIRT_GIC_V2M] = 48, /* ...to 48 + NUM_GICV2M_SPIS - 1 */
      [VIRT_SMMU] = 74,    /* ...to 74 + NUM_SMMU_IRQS - 1 */
-@@ -1576,6 +1584,59 @@ static void create_rtc(const VirtMachineState *vms)
+@@ -1576,6 +1586,61 @@ static void create_rtc(const VirtMachineState *vms)
      g_free(nodename);
  }
  
 +/*
 + * Android emulator ("ranchu") guest kernels have no virtio-gpu/virtio-input
-+ * drivers; they drive the goldfish framebuffer, event and battery devices.
++ * drivers; they drive the goldfish framebuffer, event, battery and audio
++ * devices. Audio goes to -global goldfish-audio.chardev=<id> as raw PCM.
 + * Width/height/dpi and the input device name can be changed with
 + * -global goldfish-fb.width=... / -global goldfish-events.name=...
 + */
@@ -765,6 +934,7 @@ index 219597c..dc279ba 100644
 +          "generic,goldfish-events-keypad" },
 +        { VIRT_GOLDFISH_BATTERY, TYPE_GOLDFISH_BATTERY,
 +          "generic,goldfish-battery" },
++        { VIRT_GOLDFISH_AUDIO, TYPE_GOLDFISH_AUDIO, "generic,goldfish-audio" },
 +    };
 +    MachineState *ms = MACHINE(vms);
 +
@@ -803,7 +973,7 @@ index 219597c..dc279ba 100644
  static DeviceState *gpio_key_dev;
  static void virt_powerdown_req(Notifier *n, void *opaque)
  {
-@@ -3208,6 +3269,10 @@ static void machvirt_init(MachineState *machine)
+@@ -3208,6 +3273,10 @@ static void machvirt_init(MachineState *machine)
  
      create_rtc(vms);
  
@@ -814,7 +984,7 @@ index 219597c..dc279ba 100644
      create_pcie(vms);
      create_cxl_host_reg_region(vms);
  
-@@ -3504,6 +3569,16 @@ static void virt_set_virtio_transports(Object *obj, Visitor *v,
+@@ -3504,6 +3573,16 @@ static void virt_set_virtio_transports(Object *obj, Visitor *v,
      vms->virtio_transports = transports;
  }
  
@@ -831,7 +1001,7 @@ index 219597c..dc279ba 100644
  static bool virt_get_dtb_randomness(Object *obj, Error **errp)
  {
      VirtMachineState *vms = VIRT_MACHINE(obj);
-@@ -4318,6 +4393,13 @@ static void virt_machine_class_init(ObjectClass *oc, const void *data)
+@@ -4318,6 +4397,13 @@ static void virt_machine_class_init(ObjectClass *oc, const void *data)
                                            "Set MSI settings. "
                                            "Valid values are auto, gicv2m, its and off");
  
@@ -847,10 +1017,10 @@ index 219597c..dc279ba 100644
                                     virt_set_dtb_randomness);
 diff --git a/include/hw/arm/android-goldfish.h b/include/hw/arm/android-goldfish.h
 new file mode 100644
-index 0000000..c1adaa5
+index 0000000..c9e8f12
 --- /dev/null
 +++ b/include/hw/arm/android-goldfish.h
-@@ -0,0 +1,12 @@
+@@ -0,0 +1,13 @@
 +/*
 + * Goldfish platform devices for Android emulator guest kernels on 'virt'.
 + * SPDX-License-Identifier: GPL-2.0-or-later
@@ -861,23 +1031,25 @@ index 0000000..c1adaa5
 +#define TYPE_GOLDFISH_FB      "goldfish-fb"
 +#define TYPE_GOLDFISH_EVENTS  "goldfish-events"
 +#define TYPE_GOLDFISH_BATTERY "goldfish-battery"
++#define TYPE_GOLDFISH_AUDIO   "goldfish-audio"
 +
 +#endif
 diff --git a/include/hw/arm/virt.h b/include/hw/arm/virt.h
-index 22e66d1..f9f381d 100644
+index 22e66d1..d888c25 100644
 --- a/include/hw/arm/virt.h
 +++ b/include/hw/arm/virt.h
-@@ -100,6 +100,9 @@ enum {
+@@ -100,6 +100,10 @@ enum {
      VIRT_GWDT_WS0,
      VIRT_GWDT_REFRESH,
      VIRT_GWDT_CONTROL,
 +    VIRT_GOLDFISH_FB,
 +    VIRT_GOLDFISH_EVENTS,
 +    VIRT_GOLDFISH_BATTERY,
++    VIRT_GOLDFISH_AUDIO,
      VIRT_LOWMEMMAP_LAST,
  };
  
-@@ -177,6 +180,7 @@ struct VirtMachineState {
+@@ -177,6 +181,7 @@ struct VirtMachineState {
      bool ras;
      bool mte;
      bool dtb_randomness;

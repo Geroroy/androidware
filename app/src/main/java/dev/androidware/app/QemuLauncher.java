@@ -24,6 +24,7 @@ public final class QemuLauncher {
     public static File runtimeDir(Context ctx) { File d = new File(ctx.getFilesDir(), "run"); d.mkdirs(); return d; }
     public static File vncSocket(Context ctx) { return new File(runtimeDir(ctx), "vnc.sock"); }
     public static File qmpSocket(Context ctx) { return new File(runtimeDir(ctx), "qmp.sock"); }
+    public static File audioSocket(Context ctx) { return new File(runtimeDir(ctx), "audio.sock"); }
     public static File serialLog(Context ctx) { return new File(runtimeDir(ctx), "serial.log"); }
     /** Data dir with QEMU's share/ files (keymaps etc.), extracted from assets on first run. */
     public static File dataDir(Context ctx) { File d = new File(ctx.getFilesDir(), "qemu-share"); d.mkdirs(); return d; }
@@ -50,7 +51,16 @@ public final class QemuLauncher {
         if (p.kernel != null && p.cmdline != null && !p.cmdline.isEmpty()) { a.add("-append"); a.add(p.cmdline); }
         if (GuestProfile.KIND_ANDROID_RANCHU.equals(p.kind)) {
             // Order matters: the ranchu kernel names virtio-mmio disks in reverse creation order,
-            // and fstab.ranchu expects vda=system, vdb=cache, vdc=data.
+            // and fstab.ranchu expects vda=system, vdb=cache, vdc=data, vdd=SD card. vde = APK transfer disk
+            // read by /aw-install.sh (GuestMedia). vde needs vdd, so both or neither.
+            if (p.androidSdcard != null && p.androidTransfer != null) {
+                a.add("-drive"); a.add("if=none,id=xfer,file=" + p.androidTransfer + ",format=raw,readonly=on");
+                a.add("-device"); a.add("virtio-blk-device,drive=xfer");
+                a.add("-drive"); a.add("if=none,id=sd,file=" + p.androidSdcard + ",format=raw,cache=writeback");
+                a.add("-device"); a.add("virtio-blk-device,drive=sd");
+            }
+            a.add("-chardev"); a.add("socket,id=aud,path=" + audioSocket(ctx).getAbsolutePath() + ",server=on,wait=off");
+            a.add("-global"); a.add("goldfish-audio.chardev=aud");
             a.add("-drive"); a.add("if=none,id=data,file=" + p.androidData + ",format=raw,cache=writeback");
             a.add("-device"); a.add("virtio-blk-device,drive=data");
             a.add("-drive"); a.add("if=none,id=cache,file=" + p.androidCache + ",format=raw,cache=writeback");

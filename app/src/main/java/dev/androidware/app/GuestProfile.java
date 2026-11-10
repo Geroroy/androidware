@@ -32,6 +32,7 @@ public final class GuestProfile {
     public int displayHeight = 720;
     public int displayDpi = 240;
     public String androidSystem, androidCache, androidData;   // KIND_ANDROID_RANCHU only
+    public String androidSdcard, androidTransfer;             // optional: guest SD card (vdd), APK transfer disk (vde)
 
     public static File dir(File filesDir) { File d = new File(filesDir, "profiles"); d.mkdirs(); return d; }
 
@@ -61,6 +62,8 @@ public final class GuestProfile {
             p.androidSystem = o.optString("androidSystem", null);
             p.androidCache = o.optString("androidCache", null);
             p.androidData = o.optString("androidData", null);
+            p.androidSdcard = o.optString("androidSdcard", null);
+            p.androidTransfer = o.optString("androidTransfer", null);
         } catch (IOException | JSONException e) {
             // fall through with defaults
         }
@@ -75,7 +78,7 @@ public final class GuestProfile {
              .put("network", network).put("virtioGpu", virtioGpu)
              .put("displayWidth", displayWidth).put("displayHeight", displayHeight).put("displayDpi", displayDpi)
              .put("kind", kind).put("androidSystem", androidSystem).put("androidCache", androidCache)
-             .put("androidData", androidData);
+             .put("androidData", androidData).put("androidSdcard", androidSdcard).put("androidTransfer", androidTransfer);
         } catch (JSONException e) { throw new IOException(e); }
         File f = new File(dir(filesDir), name + ".json");
         String text;

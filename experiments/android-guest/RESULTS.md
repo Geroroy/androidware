@@ -32,10 +32,28 @@
 - NativeActivity 테스트 앱이 검은 화면: 창 버퍼(RGBA_8888)와 EGL 설정(RGB565) 불일치. `ANativeWindow_setBuffersGeometry(…, EGL_NATIVE_VISUAL_ID)`로 해결. `GLSurfaceView`를 쓰는 게임(검은방 1)은 프레임워크가 처리한다.
 - Launcher3 "Welcome" 카드의 GOT IT 탭은 반응이 없었다(다른 UI는 정상). 원인 미조사.
 - Settings 앱이 한 번 "has stopped"로 종료됨(탭/뒤로 시퀀스 후). 원인 미조사.
-- 1회: smp 4 부팅 직후 첫 `screendump`에서 QEMU 프로세스가 메시지 없이 종료. 이후 같은 구성으로 5회 더 실행(그중 3회는 gdb 아래)했을 때는 재현되지 않음. **미해결**, 기기에서 같은 증상이 나오면 우선 조사.
+- (세션 3에서 원인 확정·수정, 아래 참조) 1회: smp 4 부팅 직후 첫 `screendump`에서 QEMU 프로세스가 메시지 없이 종료. 이후 같은 구성으로 5회 더 실행(그중 3회는 gdb 아래)했을 때는 재현되지 않음. **미해결**, 기기에서 같은 증상이 나오면 우선 조사.
 
 ## 한계 (중요)
 
 - 게스트 GL은 소프트웨어 `libagl`(PixelFlinger)이며 **GLES 1.x만** 지원한다. 검은방 1(GLES 1.x, 2D)은 이 경로로 가능성이 있지만, **N.O.V.A. 3(GLES 2.0)은 이 경로로 실행 불가**. GLES 2.0은 (a) goldfish pipe + 호스트 GLES 렌더러, 또는 (b) virtio-gpu를 지원하는 새 커널 + 게스트 Mesa가 필요하다.
 - 오디오(goldfish-audio) 미구현. 게임 오디오는 무음.
 - 네트워크 없음(`-nic none`), adb 없음: APK는 userdata 이미지에 써 넣고 콘솔에서 `pm install`.
+
+## 세션 3 추가 (2026-11-10): APK 자동 설치, SD 카드, 오디오, 크래시 원인
+
+구성(`FULL=1 boot.py`, 앱 0.0.7과 같은 명령행): 오버레이 램디스크 `ramdisk-aw.img`, 전달 디스크(vde), SD 카드(vdd), `-chardev file,id=aud` + `-global goldfish-audio.chardev=aud`. 미디어는 앱의 `GuestMedia` 클래스를 PC의 Java로 실행해 만들었다(`GuestMediaCli.java`).
+
+| 항목 | 결과 |
+|---|---|
+| 램디스크 오버레이(원본 gzip 뒤에 cpio gzip 덧붙임) | 커널 3.10이 두 아카이브를 순서대로 풀어 `init.ranchu.rc`가 교체되고 `/aw-install.sh` 생성. `sys.boot_completed=1`에 `aw-install` 서비스 시작(`seclabel u:r:su:s0`) |
+| 자동 설치·실행 | `androidware: install dev.androidware.gles1test: Success` → `starting ...` → 앱 로그 `fps=35`(홈 화면 위 실행). 부팅 75~85초, 설치·실행은 그 뒤 약 20초 |
+| SD 카드 | `/storage/4157-0001` (fuse, 523,244 KB) 마운트. `/storage/emulated`(내부)도 존재 |
+| 오디오 | `/dev/eac` 생성, goldfish-audio 인터럽트 1,237회. 벨소리(Andromeda.ogg) 재생 시 `audio.raw` 5,103,616 B(약 28.9초), 2,551,808 샘플 중 814,686개가 진폭 200 초과, 최대 9,665 |
+
+발견·수정:
+- 게스트 `dd`(toolbox)는 `conv=` 옵션이 꺼져 있다("conv option disabled"). APK 끝부분(512 B 미만)은 `dd bs=1 ... >> 파일`로 이어 붙인다. 첫 시도에서는 이 때문에 `INSTALL_PARSE_FAILED_UNEXPECTED_EXCEPTION`.
+- **세션 2의 "간헐적 QEMU 종료"**: 종료 상태 -11(SIGSEGV)로 확인. 화면 갱신이 한동안 없다가 처음 갱신될 때(예: 부팅 후 첫 screendump) 죽었고, 0.3초 간격으로 계속 캡처하면 4회 모두 생존. 원인은 goldfish-fb의 `first = -1`: `framebuffer_update_display()`는 `*first_row`를 **입력(시작 행)**으로도 쓰므로 표면 버퍼 한 줄 앞부터 그렸다. `first = 0`으로 수정. 수정 후 반복 결과는 아래.
+- 수정 후: "부팅 완료 10초 뒤 첫 screendump" 절차 8회 연속 정상 + 전체 시나리오 1회 정상(자동 설치 Success, fps 38~42, 오디오 5,398,528 B). 수정 전에는 같은 절차 약 9회 중 2회 SIGSEGV.
+
+재현: `scripts/fetch-android-guest.sh` → `javac -d out app/src/main/java/dev/androidware/app/GuestMedia.java experiments/android-guest/GuestMediaCli.java` → `java -cp out GuestMediaCli ramdisk dist/android-guest/ramdisk.img dist/android-guest/ramdisk-aw.img`, `... transfer dist/android-guest/transfer.img <apk> <package> 1`, `... sparse app/src/main/assets/androidguest/sdcard.img.gz dist/android-guest/sdcard.img` → `QEMU=... FULL=1 experiments/android-guest/boot.py dist/android-guest <tag>`.

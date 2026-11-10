@@ -28,6 +28,9 @@
         -M virt,highmem=off,goldfish=on -cpu cortex-a15
         virtio-blk-device x3 (data, cache, system 순서)
         goldfish-fb (VNC로 보이는 화면) / goldfish-events (VNC 포인터·QMP mtt → 터치) / goldfish-battery
+        goldfish-audio → -chardev socket(files/run/audio.sock) → AudioPlayer(AudioTrack)
+        vdd = SD 카드(FAT32), vde = APK 전달 디스크 → 램디스크 오버레이의 aw-install 서비스가 pm install + 실행
+        (GuestMedia: 램디스크 오버레이/전달 디스크/희소 이미지, AndroidGuest.prepareBoot가 부팅 전마다 호출)
                                                   ▼
         게스트 커널(AArch64, COMPAT) → 32비트/64비트 사용자 공간
 ```
