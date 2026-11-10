@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">Androidware</string>
+    <string name="app_name">Andronia</string>
     <string name="btn_host_info">Host check</string>
     <string name="btn_selftest">Engine self-test</string>
     <string name="btn_boottest">Boot test</string>

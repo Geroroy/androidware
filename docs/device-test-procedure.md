@@ -24,9 +24,9 @@
 ## 다음 단계로 넘어가는 조건
 - 32비트 바이너리의 `fp_ms`가 PC 실험 대비 어떤 비율인지 기록(기기 TCG 백엔드 성능의 첫 지표).
 
-## M1: Android 7.0 게스트 + 게임 (앱 0.0.15-m1)
+## M1: Android 7.0 게스트 + 게임 (앱 0.0.16-m1)
 
-준비: `adb install -r dist/androidware-0.0.15-m1.apk`(서명 키가 바뀌었으면 먼저 `adb uninstall dev.androidware.app`). 기기에 약 3 GB 여유 공간.
+준비: `adb install -r dist/andronia-0.0.16-m1.apk`(서명 키가 바뀌었으면 먼저 `adb uninstall dev.androidware.app`). 기기에 약 3 GB 여유 공간.
 
 | 단계 | 조작 | 기대 결과 | 기록할 것 |
 |---|---|---|---|
