@@ -158,7 +158,7 @@ public class VncView extends View {
                 }
             }
         } catch (IOException e) {
-            if (running.get()) say(e.getMessage());
+            if (running.get()) say("vnc: disconnected" + (e.getMessage() != null ? " (" + e.getMessage() + ")" : ""));
         } finally {
             try { sock.close(); } catch (IOException ignored) {}
             synchronized (this) { out = null; }

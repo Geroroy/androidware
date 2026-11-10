@@ -11,4 +11,4 @@
 | 항목 | 결과 | 조건 |
 |---|---|---|
 | PC(x86_64)에서 AArch64 게스트 + AArch32 사용자 공간 | 성공 (4개 CPU 모델) | `experiments/pc-tcg-aarch32/RESULTS.md` |
-| Galaxy S25 Ultra에서 엔진 실행 | **미검증** (기기 없음) | `docs/device-test-procedure.md` 절차로 측정 예정 |
+| Galaxy S25 Ultra(SM-S938N, Android 16)에서 엔진 실행 + 게스트 커널 부팅 + 게스트 안 32비트 실행 | **성공** (2회, 2026-11-10) | 수치는 `docs/status.md` "기기 실측 4차" |

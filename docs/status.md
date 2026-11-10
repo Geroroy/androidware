@@ -76,3 +76,21 @@
 | 비율 (TCG / 네이티브) | 1.9x | 6.6x | 3.6x |
 
 - Boot test 실패: `-vnc unix:...: could not find keymap file for language 'en-us'`, exit 1 (286 ms). 원인: VNC 서버가 시작 시 `-L` 디렉터리의 `keymaps/en-us`를 요구하는데 번들하지 않았음(PC 검증에서는 시스템 기본 데이터 디렉터리가 있어 드러나지 않았음). 조치: 0.0.5-m0에 `assets/qemu-share/keymaps/en-us` 포함. 재측정 대기 중.
+
+## 기기 실측 4차 — Boot test 성공 (2026-11-10, SM-S938N, 앱 0.0.5-m0, 2회)
+
+QEMU 11.1.3 `-M virt -cpu cortex-a57 -accel tcg,thread=multi -smp 2 -m 1024M`, 게스트 Ubuntu 6.8.0-71 arm64 커널 + initramfs. 두 번 모두 `[qemu exited with code 0]`, `=== DONE`, 체크섬 일치.
+
+| 실행 | int_ms | fp_ms | mem_ms | 네이티브 대비 |
+|---|---|---|---|---|
+| 호스트 네이티브 64비트 | 93 | 108 | 5 | 1x |
+| qemu-arm user mode, 32비트 | 179 | 710 | 18 | 1.9x / 6.6x / 3.6x |
+| 게스트 안 64비트 프로세스 | 367, 271 | 625, 608 | 65, 64 | 2.9~3.9x / 5.7x / 13x |
+| **게스트 안 32비트 프로세스** | 193, 194 | 805, 794 | 83, 71 | **2.1x / 7.4x / 14~17x** |
+
+- 게스트 커널 로그: `CPU features: detected: 32-bit EL0 Support` → 64비트 전용 Oryon 위에서 게스트가 AArch32 EL0를 제공받음을 기기에서 확인.
+- 부팅: 커널 시작부터 `/init`까지 게스트 시간 1.3~1.5초, QEMU 시작부터 종료까지 벽시계 6.1~6.9초.
+- VNC 경로 동작(640x480 프레임 수신, "This VM has no graphic display device" 표시), `-serial file:` 로그 수집, 자동 종료 후 정리 동작.
+- 알려진 사소한 문제: 게스트 종료 시 VNC 소켓이 닫히며 로그에 `null` 한 줄이 찍힘(표시상 문제).
+
+**M0 판정**: "루팅 없는 S25 Ultra에서 QEMU 엔진 실행 + AArch64 게스트 부팅 + 게스트 안 32비트 ARM 실행"이 입증됨. 포기 조건 A-1/A-2/A-3는 아직 미판정(Android 게스트 이미지, 실제 게임, GPU 경로가 남음). 메모리 대역폭 14~17배 저하(softmmu)는 3D 게임에 큰 위험 요소로 기록.
