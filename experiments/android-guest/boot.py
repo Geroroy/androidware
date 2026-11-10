@@ -28,7 +28,7 @@ args = [qemu, '-M', 'virt,highmem=off,goldfish=on', '-cpu', 'cortex-a15', '-smp'
         '-drive', f'if=none,id=data,file={wd}/userdata.img,format=raw', '-device', 'virtio-blk-device,drive=data',
         '-drive', f'if=none,id=cache,file={wd}/cache.img,format=raw', '-device', 'virtio-blk-device,drive=cache',
         '-drive', f'if=none,id=system,file={wd}/system.img,format=raw,readonly=on', '-device', 'virtio-blk-device,drive=system',
-        '-global', 'goldfish-fb.width=480', '-global', 'goldfish-fb.height=800', '-global', 'goldfish-fb.dpi=240',
+        '-global', 'goldfish-fb.width=' + os.environ.get('W', '480'), '-global', 'goldfish-fb.height=' + os.environ.get('H', '800'), '-global', 'goldfish-fb.dpi=' + os.environ.get('DPI', '240'),
         '-nic', 'none']
 apk = os.environ.get('APK')
 if apk:  # no adb (guest network is off): put the APK straight into the userdata ext4 image

@@ -161,6 +161,23 @@ public final class AndroidGuest {
         }
     }
 
+    /** Guest display presets: label, width, height, dpi. The guest renders in software, so larger is slower. */
+    public static final String[] DISPLAY_LABELS = {"320 x 480 (fastest)", "480 x 800 (default)", "540 x 960", "720 x 1280 (slowest)"};
+    private static final int[][] DISPLAY_MODES = {{320, 480, 160}, {480, 800, 240}, {540, 960, 240}, {720, 1280, 320}};
+    private static File displayFile(Context ctx) { return new File(dir(ctx), "display.txt"); }
+
+    public static int displayMode(Context ctx) {
+        try {
+            int i = Integer.parseInt(new String(java.nio.file.Files.readAllBytes(displayFile(ctx).toPath()), java.nio.charset.StandardCharsets.UTF_8).trim());
+            if (i >= 0 && i < DISPLAY_MODES.length) return i;
+        } catch (IOException | NumberFormatException ignored) {}
+        return 1;
+    }
+
+    public static void setDisplayMode(Context ctx, int i) throws IOException {
+        try (OutputStream o = new FileOutputStream(displayFile(ctx))) { o.write(String.valueOf(i).getBytes(java.nio.charset.StandardCharsets.UTF_8)); }
+    }
+
     /** Profile that boots the image: ARMv7 CPU, goldfish devices, virtio-mmio disks. */
     public static GuestProfile profile(Context ctx) {
         File d = dir(ctx);
@@ -183,9 +200,10 @@ public final class AndroidGuest {
         // qemu.gles=0: guest software GLES (libGLES_android) until the virgl path exists.
         g.cmdline = "console=ttyAMA0 androidboot.console=ttyAMA0 androidboot.hardware=ranchu qemu=1 qemu.gles=0 "
                 + "androidboot.selinux=permissive";
-        g.displayWidth = 480;
-        g.displayHeight = 800;
-        g.displayDpi = 240;
+        int[] m = DISPLAY_MODES[displayMode(ctx)];
+        g.displayWidth = m[0];
+        g.displayHeight = m[1];
+        g.displayDpi = m[2];
         return g;
     }
 

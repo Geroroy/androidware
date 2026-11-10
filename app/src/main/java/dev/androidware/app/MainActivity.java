@@ -78,13 +78,18 @@ public class MainActivity extends Activity implements EngineService.LogListener,
         ((Button) findViewById(R.id.btn_stop)).setOnClickListener(v -> stopGuest());
         ((Button) findViewById(R.id.btn_android_get)).setOnClickListener(v -> androidGuestMenu());
         ((Button) findViewById(R.id.btn_android_start)).setOnClickListener(v -> startAndroid());
+        ((Button) findViewById(R.id.btn_fullscreen)).setOnClickListener(v -> setFullscreen(true));
+        // Immersive mode ends when the user swipes in from a screen edge: use that to leave fullscreen.
+        getWindow().getDecorView().setOnSystemUiVisibilityChangeListener(vis -> {
+            if (fullscreen && (vis & android.view.View.SYSTEM_UI_FLAG_FULLSCREEN) == 0) setFullscreen(false);
+        });
         ((Button) findViewById(R.id.btn_export)).setOnClickListener(v -> {
             Intent i = new Intent(Intent.ACTION_CREATE_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("text/plain")
                     .putExtra(Intent.EXTRA_TITLE, "androidware-log-" + new SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(new Date()) + ".txt");
             startActivityForResult(i, REQ_EXPORT);
         });
 
-        log("androidware 0.0.7-m1; profile=" + profile.name + " kernel=" + profile.kernel + " initrd=" + profile.initrd + " disk=" + profile.disk);
+        log("androidware 0.0.8-m1; profile=" + profile.name + " kernel=" + profile.kernel + " initrd=" + profile.initrd + " disk=" + profile.disk);
         Intent svc = new Intent(this, EngineService.class);
         bindService(svc, conn, Context.BIND_AUTO_CREATE);
     }
@@ -156,6 +161,24 @@ public class MainActivity extends Activity implements EngineService.LogListener,
     }
 
     private volatile long bootStartMs;
+    private boolean fullscreen;
+
+    /** Fullscreen: only the guest display, system bars hidden. Swipe in from a screen edge to leave. */
+    @SuppressWarnings("deprecation")
+    private void setFullscreen(boolean on) {
+        fullscreen = on;
+        findViewById(R.id.panel).setVisibility(on ? android.view.View.GONE : android.view.View.VISIBLE);
+        getWindow().getDecorView().setSystemUiVisibility(on
+                ? android.view.View.SYSTEM_UI_FLAG_FULLSCREEN | android.view.View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+                  | android.view.View.SYSTEM_UI_FLAG_IMMERSIVE | android.view.View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+                : android.view.View.SYSTEM_UI_FLAG_VISIBLE);
+        if (on) {
+            getWindow().addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+            toast("Fullscreen: swipe in from the top or bottom edge to leave");
+        } else {
+            getWindow().clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        }
+    }
 
     private void progress(String what, long done, long total) {
         log("  " + what + ": " + (done >> 20) + "/" + (total > 0 ? (total >> 20) : "?") + " MiB");
@@ -166,7 +189,8 @@ public class MainActivity extends Activity implements EngineService.LogListener,
         String[] items = {
                 "Download from dl.google.com (" + (AndroidGuest.ZIP_SIZE >> 20) + " MiB)",
                 "Import armeabi-v7a-24_r07.zip",
-                "Factory reset guest data"};
+                "Factory reset guest data",
+                "Resolution… (now " + AndroidGuest.DISPLAY_LABELS[AndroidGuest.displayMode(this)] + ")"};
         new android.app.AlertDialog.Builder(this)
                 .setTitle("Android 7.0 guest (" + (AndroidGuest.isInstalled(this) ? "installed" : "not installed") + ")")
                 .setItems(items, (d, which) -> {
@@ -187,6 +211,13 @@ public class MainActivity extends Activity implements EngineService.LogListener,
                     } else if (which == 1) {
                         Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("application/zip");
                         startActivityForResult(i, REQ_ANDROID_ZIP);
+                    } else if (which == 3) {
+                        new android.app.AlertDialog.Builder(this).setTitle("Guest resolution (applies on next Start Android)")
+                                .setSingleChoiceItems(AndroidGuest.DISPLAY_LABELS, AndroidGuest.displayMode(this), (d3, w3) -> {
+                                    try { AndroidGuest.setDisplayMode(this, w3); log("guest resolution: " + AndroidGuest.DISPLAY_LABELS[w3] + " (restart the guest to apply)"); }
+                                    catch (IOException e) { log("cannot save resolution: " + e); }
+                                    d3.dismiss();
+                                }).show();
                     } else {
                         if (service != null && service.isRunning()) { toast("stop the guest first"); return; }
                         io.execute(() -> {

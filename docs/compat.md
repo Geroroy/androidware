@@ -15,4 +15,4 @@
 | PC(x86_64)에서 Android 7.0 armv7 게스트 부팅(`virt,goldfish=on`) | **성공**: boot_completed 75~85초(smp 2), 홈 화면, 터치·키 | `experiments/android-guest/RESULTS.md` |
 | PC에서 게스트 안 32비트 GLES 1.x 테스트 앱 | **성공**: 설치·실행, 소프트웨어 GL 약 20 fps(480x800 전체 갱신) | 같은 문서. 게임 아님 |
 | PC에서 APK 자동 설치·실행(전달 디스크), SD 카드, 오디오 PCM 출력 | **성공** (2026-11-10 세션 3) | 같은 문서 "세션 3" |
-| S25 Ultra에서 Android 7.0 게스트 | 미검증 | `docs/device-test-procedure.md` M1 절 |
+| S25 Ultra에서 Android 7.0 게스트 | **홈 화면 부팅 + 터치 동작** (2026-11-10, 0.0.7-m1, 사용자 스크린샷). 게임·소리 미확인 | `docs/device-test-procedure.md` M1 절 |
