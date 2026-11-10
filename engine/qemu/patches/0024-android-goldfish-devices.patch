@@ -15,7 +15,7 @@ new file mode 100644
 index 0000000..2581597
 --- /dev/null
 +++ b/hw/arm/android-goldfish.c
-@@ -0,0 +1,1270 @@
+@@ -0,0 +1,1298 @@
 +/*
 + * Minimal "goldfish" platform devices for running Android emulator (ranchu)
 + * guest kernels on the upstream 'virt' machine.
@@ -929,6 +929,7 @@ index 0000000..2581597
 +    uint64_t channel, address;
 +    uint32_t size, status;
 +    uint8_t *xfer;
++    uint32_t read_wait_us;  /* how long a read waits for the renderer's reply */
 +};
 +
 +static void goldfish_pipe_update_handlers(GoldfishPipe *p);
@@ -1070,6 +1071,31 @@ index 0000000..2581597
 +        do {
 +            n = recv(p->fd, s->xfer, len, MSG_DONTWAIT);
 +        } while (n < 0 && errno == EINTR);
++        if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK) && s->read_wait_us) {
++            /*
++             * The guest reads right after sending a GL call that returns a
++             * value, and the renderer normally answers within microseconds.
++             * Returning "again" costs the guest a sleep, a host main-loop
++             * wakeup, an interrupt and a retry, so give the reply a moment to
++             * arrive first. The BQL is dropped while waiting; the guest
++             * driver holds its own lock around this command, so no other
++             * CPU touches the registers meanwhile.
++             */
++            struct pollfd pfd = { .fd = p->fd, .events = POLLIN };
++            int fd = p->fd, r;
++
++            bql_unlock();
++            do {
++                r = ppoll(&pfd, 1, &(struct timespec){ 0, s->read_wait_us * 1000L }, NULL);
++            } while (r < 0 && errno == EINTR);
++            bql_lock();
++            if (p->closed || p->fd != fd) {
++                return PIPE_ERROR_IO;
++            }
++            do {
++                n = recv(p->fd, s->xfer, len, MSG_DONTWAIT);
++            } while (n < 0 && errno == EINTR);
++        }
 +        if (n > 0 && cpu_memory_rw_debug(current_cpu, addr, s->xfer, n, true) < 0) {
 +            goldfish_pipe_host_close(p);
 +            return PIPE_ERROR_IO;
@@ -1246,6 +1272,8 @@ index 0000000..2581597
 +
 +static const Property goldfish_pipe_properties[] = {
 +    DEFINE_PROP_STRING("socket", GoldfishPipeState, socket_path),
++    /* experimental, off: on a PC (llvmpipe) 500 us lowered the test app from 45 to 36 fps */
++    DEFINE_PROP_UINT32("read-wait-us", GoldfishPipeState, read_wait_us, 0),
 +};
 +
 +static void goldfish_pipe_class_init(ObjectClass *klass, const void *data)

@@ -51,12 +51,40 @@ public final class TouchInjector {
                     nextTrackingId = nextTrackingId % 0xfff0 + 1;
                     break;
                 }
-                case MotionEvent.ACTION_MOVE:
-                    for (int i = 0; i < e.getPointerCount(); i++) {
-                        int slot = e.getPointerId(i);
-                        if (slot >= 0 && slot < SLOTS && down[slot]) position(ev, slot, gx[i], gy[i], w, h);
+                case MotionEvent.ACTION_MOVE: {
+                    // Moves are coalesced: only the newest position of each finger is kept until the
+                    // sender is ready, and at most ~60 batches per second go out. (Sending every
+                    // sample kept QEMU's monitor thread at 20-30% of a core and stalled the guest.)
+                    boolean first;
+                    synchronized (pendingMove) {
+                        first = !movePending;
+                        for (int i = 0; i < e.getPointerCount(); i++) {
+                            int slot = e.getPointerId(i);
+                            if (slot < 0 || slot >= SLOTS || !down[slot]) continue;
+                            pendingMove[slot * 2] = toAbs(gx[i], w); pendingMove[slot * 2 + 1] = toAbs(gy[i], h);
+                            moveDirty[slot] = true;
+                        }
+                        movePending = true;
                     }
-                    break;
+                    if (first) io.execute(() -> {
+                        long wait = lastMoveMs + 16 - System.currentTimeMillis();
+                        if (wait > 0) try { Thread.sleep(wait); } catch (InterruptedException ignored) {}
+                        JSONArray mv = new JSONArray();
+                        synchronized (pendingMove) {
+                            movePending = false;
+                            try {
+                                for (int sl = 0; sl < SLOTS; sl++) if (moveDirty[sl]) {
+                                    moveDirty[sl] = false;
+                                    put(mv, "data", sl, 0, "x", pendingMove[sl * 2]);
+                                    put(mv, "data", sl, 0, "y", pendingMove[sl * 2 + 1]);
+                                }
+                            } catch (JSONException ignored) {}
+                        }
+                        lastMoveMs = System.currentTimeMillis();
+                        if (mv.length() > 0) transmit(qmpSocket, mv);
+                    });
+                    return;
+                }
                 case MotionEvent.ACTION_UP: case MotionEvent.ACTION_POINTER_UP: {
                     int slot = e.getPointerId(idx);
                     if (slot < 0 || slot >= SLOTS || !down[slot]) return;
@@ -71,27 +99,39 @@ public final class TouchInjector {
             }
         } catch (JSONException ex) { return; }
         if (ev.length() == 0) return;
-        io.execute(() -> {
-            try {
-                if (qmp == null || !qmpSocket.equals(socket)) {
-                    if (System.currentTimeMillis() < retryAfterMs) return;
-                    closeNow();
-                    QmpClient c = new QmpClient(qmpSocket);
-                    c.connect(2000);
-                    qmp = c; socket = qmpSocket;
-                }
-                qmp.execute("input-send-event", new JSONObject().put("events", ev));
-            } catch (IOException | JSONException ex) {
+        // a finger going up must not be followed by a stale queued position for it
+        synchronized (pendingMove) { for (int sl = 0; sl < SLOTS; sl++) if (!down[sl]) moveDirty[sl] = false; }
+        io.execute(() -> transmit(qmpSocket, ev));
+    }
+
+    private static final int[] pendingMove = new int[SLOTS * 2];   // guarded by pendingMove
+    private static final boolean[] moveDirty = new boolean[SLOTS]; // guarded by pendingMove
+    private static boolean movePending;                            // guarded by pendingMove
+    private static long lastMoveMs;                                // io thread only
+
+    /** io thread: sends one input-send-event command, (re)connecting to QMP if needed. */
+    private static void transmit(File qmpSocket, JSONArray ev) {
+        try {
+            if (qmp == null || !qmpSocket.equals(socket)) {
+                if (System.currentTimeMillis() < retryAfterMs) return;
                 closeNow();
-                retryAfterMs = System.currentTimeMillis() + 1000;
+                QmpClient c = new QmpClient(qmpSocket);
+                c.connect(2000);
+                qmp = c; socket = qmpSocket;
             }
-        });
+            qmp.execute("input-send-event", new JSONObject().put("events", ev));
+        } catch (IOException | JSONException ex) {
+            closeNow();
+            retryAfterMs = System.currentTimeMillis() + 1000;
+        }
     }
 
     private static void position(JSONArray ev, int slot, float gx, float gy, int w, int h) throws JSONException {
-        put(ev, "data", slot, 0, "x", clamp(Math.round(gx * ABS_MAX / Math.max(1, w - 1))));
-        put(ev, "data", slot, 0, "y", clamp(Math.round(gy * ABS_MAX / Math.max(1, h - 1))));
+        put(ev, "data", slot, 0, "x", toAbs(gx, w));
+        put(ev, "data", slot, 0, "y", toAbs(gy, h));
     }
+
+    private static int toAbs(float g, int size) { return clamp(Math.round(g * ABS_MAX / Math.max(1, size - 1))); }
 
     private static int clamp(int v) { return Math.max(0, Math.min(ABS_MAX, v)); }
 

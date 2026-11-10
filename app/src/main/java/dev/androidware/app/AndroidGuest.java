@@ -267,8 +267,7 @@ public final class AndroidGuest {
     }
     /**
      * Guest CPU count. Each guest CPU is one host thread (multi-threaded TCG). PC (4 host cores):
-     * smp 2 booted in 75-85 s, smp 4 in 142-150 s (host oversubscribed). Default: 4 on hosts with
-     * 8 or more cores, else 2.
+     * smp 2 booted in 75-85 s, smp 4 in 142-150 s (host oversubscribed). Default 2.
      */
     public static final int[] CPU_CHOICES = {1, 2, 3, 4, 6};
     private static File cpusFile(Context ctx) { return new File(dir(ctx), "cpus.txt"); }
@@ -277,7 +276,7 @@ public final class AndroidGuest {
             int n = Integer.parseInt(new String(java.nio.file.Files.readAllBytes(cpusFile(ctx).toPath()), java.nio.charset.StandardCharsets.UTF_8).trim());
             if (n >= 1 && n <= 8) return n;
         } catch (IOException | NumberFormatException ignored) {}
-        return Runtime.getRuntime().availableProcessors() >= 8 ? 4 : 2;
+        return 2;   // device (S25 Ultra, N.O.V.A. 3): with 4, CPUs 1-3 sat at ~35% and the user reported it worse than 2
     }
     public static void setCpus(Context ctx, int n) throws IOException {
         try (OutputStream o = new FileOutputStream(cpusFile(ctx))) { o.write(String.valueOf(n).getBytes(java.nio.charset.StandardCharsets.UTF_8)); }

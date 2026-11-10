@@ -98,7 +98,7 @@ public class MainActivity extends Activity implements EngineService.LogListener,
             startActivityForResult(i, REQ_EXPORT);
         });
 
-        log("androidware 0.0.14-m1; profile=" + profile.name + " kernel=" + profile.kernel + " initrd=" + profile.initrd + " disk=" + profile.disk);
+        log("androidware 0.0.15-m1; profile=" + profile.name + " kernel=" + profile.kernel + " initrd=" + profile.initrd + " disk=" + profile.disk);
         Intent svc = new Intent(this, EngineService.class);
         bindService(svc, conn, Context.BIND_AUTO_CREATE);
     }
@@ -375,7 +375,8 @@ public class MainActivity extends Activity implements EngineService.LogListener,
                     long[] p = prev.get(en.getKey());
                     if (p == null) continue;
                     int pct = (int) Math.round((en.getValue()[0] - p[0]) * 100.0 / hz / secs);
-                    if (pct >= 5) busy.add(String.format(Locale.US, "%03d%% %s", pct, en.getKey().substring(en.getKey().indexOf(' ') + 1)));
+                    int sys = (int) Math.round((en.getValue()[1] - p[1]) * 100.0 / hz / secs);
+                    if (pct >= 5) busy.add(String.format(Locale.US, "%03d%% (sys %d) %s", pct, sys, en.getKey().substring(en.getKey().indexOf(' ') + 1)));
                 }
                 java.util.Collections.sort(busy, java.util.Collections.reverseOrder());
                 for (int i = 0; i < busy.size() && i < 10; i++) sb.append(" | ").append(busy.get(i).replaceFirst("^0+(?=\\d)", ""));
@@ -408,7 +409,7 @@ public class MainActivity extends Activity implements EngineService.LogListener,
                 String st = new String(java.nio.file.Files.readAllBytes(new File(t, "stat").toPath()), StandardCharsets.ISO_8859_1);
                 int a = st.indexOf('('), b = st.lastIndexOf(')');
                 String[] f = st.substring(b + 2).split(" ");
-                out.put(t.getName() + " " + owner + ":" + st.substring(a + 1, b), new long[]{Long.parseLong(f[11]) + Long.parseLong(f[12])});
+                out.put(t.getName() + " " + owner + ":" + st.substring(a + 1, b), new long[]{Long.parseLong(f[11]) + Long.parseLong(f[12]), Long.parseLong(f[12])});
             } catch (IOException | RuntimeException ignored) {}
         }
     }

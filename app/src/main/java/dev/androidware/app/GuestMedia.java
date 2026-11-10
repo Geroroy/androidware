@@ -82,6 +82,17 @@ public final class GuestMedia {
             + "  echo \"awcrash: $l\" > /dev/kmsg\n"
             + "done\n";
 
+    /**
+     * Runs in the guest as root: once a minute writes the busiest guest threads (5 s sample) to the
+     * kernel log / serial console ("awperf:" lines, only in "Export log"), to tell whether a slow game
+     * is limited by its own code (user time) or by the kernel/GL pipe (system time).
+     */
+    static final String PERF_SCRIPT = "#!/system/bin/sh\n"
+            + "while true; do\n"
+            + "  sleep 55\n"
+            + "  top -n 1 -d 5 -m 10 -t | while read -r l; do [ -n \"$l\" ] && echo \"awperf: $l\" > /dev/kmsg; done\n"
+            + "done\n";
+
     static final String RC_ADDITION = "\n# --- androidware ---\n"
             + "service aw-install /system/bin/sh /aw-install.sh\n"
             + "    user root\n"
@@ -96,8 +107,14 @@ public final class GuestMedia {
             + "    seclabel u:r:su:s0\n"
             + "    disabled\n"
             + "\n"
+            + "service aw-perf /system/bin/sh /aw-perf.sh\n"
+            + "    user root\n"
+            + "    group root\n"
+            + "    seclabel u:r:su:s0\n"
+            + "    disabled\n"
+            + "\n"
             + "on property:sys.boot_completed=1\n"
-            + "    start aw-crashlog\n"
+            + "    start aw-crashlog\n"            + "    start aw-perf\n"
             + "    start aw-install\n";
 
     /**
@@ -118,6 +135,7 @@ public final class GuestMedia {
         }
         cpioAdd(cpio, "aw-install.sh", 0100750, INSTALL_SCRIPT.getBytes(StandardCharsets.UTF_8));
         cpioAdd(cpio, "aw-crashlog.sh", 0100750, CRASHLOG_SCRIPT.getBytes(StandardCharsets.UTF_8));
+        cpioAdd(cpio, "aw-perf.sh", 0100750, PERF_SCRIPT.getBytes(StandardCharsets.UTF_8));
         cpioAdd(cpio, "TRAILER!!!", 0, new byte[0]);
         try (OutputStream o = new FileOutputStream(out)) {
             o.write(orig);
