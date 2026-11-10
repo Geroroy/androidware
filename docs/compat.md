@@ -2,7 +2,7 @@
 
 | 게임 | 기기 | 게스트 | 설치 | 앱 실행 | 타이틀 진입 | 실제 플레이 | FPS/프레임타임 | 메모리 | 비고 |
 |---|---|---|---|---|---|---|---|---|---|
-| (없음) | — | — | — | — | — | — | — | — | 실제 기기 측정 전. APK 미제공. |
+| N.O.V.A. 3 Freedom Edition (`com.gameloft.android.ANMP.GloftNAHM`) | SM-S938N | Android 7.0 armv7, Host GPU(Adreno 830), 720x1280, 앱 0.0.11-m1 | 성공 | 시작됨, 초기화 중 종료 | 실패 | — | — | — | 2026-11-10. 추가 데이터 없음으로 추정되는 크래시(GameInstaller NPE, `CStrings::GetString` SIGSEGV). `docs/status.md` 기기 실측 8차 |
 
 측정 방법(예정): 게스트 안에서 `dumpsys gfxinfo <pkg>`/`SurfaceFlinger --latency`로 프레임타임, 호스트에서 `adb shell dumpsys meminfo dev.androidware.app` 및 QEMU 프로세스 RSS, 기기 조건(온도/배터리/성능 모드)을 함께 기록한다.
 

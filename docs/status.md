@@ -22,6 +22,14 @@
 - PC 검증(llvmpipe): 수정 전 `webview_shell` 실행 → 같은 FATAL로 종료(재현 2회). 수정 후 → Activity 표시, 프로세스 생존. N.O.V.A. 3 자체는 APK가 없어 PC에서 실행하지 못했다. **기기 재확인 대기.**
 - 크래시 로그 필터에 `EGL_emulation:E chromium:F` 추가.
 
+### 기기 실측 8차 (0.0.11-m1, Export log) — WebView 크래시 해소, 게임 데이터 단계에서 종료
+
+- 0.0.11-m1 수정 확인: WebView의 `gpu_info_collector` abort가 더 이상 없다. 게임이 GL 스레드를 만들고 네이티브 `Application::Init`까지 진행.
+- 1차 실행(pid 1379): Java `NullPointerException`(`GameInstaller.run → … → SUtils.ReadFile`, `Context.getResources()` on null). GameInstaller는 Gameloft의 추가 데이터 확인·다운로드 단계.
+- 2차 실행(pid 1699): 네이티브 SIGSEGV, `Application::Init → InitString → AdsManager::UpdateLanguage → CStrings::GetString`(this=NULL, fault addr 0x1dc4). 문자열 테이블이 로드되지 않은 상태.
+- 해석(추정, APK 미확보로 미검증): 두 크래시 모두 **게임 추가 데이터(OBB/다운로드 리소스)가 게스트에 없는 것**과 맞는다. 게스트는 네트워크가 꺼져 있고, /data는 550 MB(140,800 블록)라 약 2 GB 데이터를 받을 공간도 없다. VM/GL 문제로 볼 근거는 현재 없음(`eglGetConfigAttrib … EGL_BAD_ATTRIBUTE` 3회는 미지원 속성 조회로, 크래시 지점과 무관).
+- 필요한 것: 게임 데이터 전달 경로(OBB 가져오기 → 게스트 `/sdcard/Android/obb/<패키지>/`)와 큰 저장 공간. 사용자가 가진 데이터 형태 확인 후 진행.
+
 (이전 계획) 사용자가 0.0.10-m1로 다시 실행 → `graphics:` 줄과 `[guest] awcrash:` 내용으로 원인 확정.
 
 ## 세션 4 요약 (2026-11-10) — 호스트 GPU GLES 2.0 경로 (앱 0.0.9-m1, 실험적)
