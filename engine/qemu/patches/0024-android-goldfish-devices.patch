@@ -12,10 +12,10 @@ index 6f5b2ad..efea378 100644
      bool
 diff --git a/hw/arm/android-goldfish.c b/hw/arm/android-goldfish.c
 new file mode 100644
-index 0000000..e7afa43
+index 0000000..25faa0a
 --- /dev/null
 +++ b/hw/arm/android-goldfish.c
-@@ -0,0 +1,849 @@
+@@ -0,0 +1,1234 @@
 +/*
 + * Minimal "goldfish" platform devices for running Android emulator (ranchu)
 + * guest kernels on the upstream 'virt' machine.
@@ -25,6 +25,8 @@ index 0000000..e7afa43
 + *   goldfish-battery  battery/AC status (generic,goldfish-battery), always full on AC
 + *   goldfish-audio    PCM output (generic,goldfish-audio): 44.1 kHz stereo s16le, written
 + *                     raw to a chardev (the host app plays it); paced in guest time
++ *   goldfish-pipe     /dev/qemu_pipe (generic,android-pipe): "opengles" connections are
++ *                     forwarded to a unix socket where a GLES render server listens
 + *
 + * The register interfaces follow the guest drivers in the Android goldfish
 + * kernels (drivers/video/goldfishfb.c, drivers/input/keyboard/goldfish_events.c,
@@ -45,6 +47,13 @@ index 0000000..e7afa43
 +#include "system/address-spaces.h"
 +#include "ui/console.h"
 +#include "qemu/timer.h"
++#include "qemu/sockets.h"
++#include "qemu/main-loop.h"
++#include "qemu/error-report.h"
++#include "qemu/queue.h"
++#include "qemu/bitops.h"
++#include <poll.h>
++#include <glib-unix.h>
 +#include "chardev/char-fe.h"
 +#include "hw/core/qdev-properties-system.h"
 +#include "ui/input.h"
@@ -840,6 +849,377 @@ index 0000000..e7afa43
 +    set_bit(DEVICE_CATEGORY_SOUND, dc->categories);
 +}
 +
++/* ------------------------------------------------------------------------ */
++/* goldfish-pipe                                                            */
++/*
++ * Guest <-> host byte channels (/dev/qemu_pipe). Only the "opengles" service
++ * is provided: each guest connection becomes one connection to a unix socket
++ * (property "socket") where a GLES render server listens. Everything else
++ * (qemud:* services) is refused, as if the emulator had no such service.
++ */
++
++enum {
++    PIPE_REG_COMMAND      = 0x00,
++    PIPE_REG_STATUS       = 0x04,
++    PIPE_REG_CHANNEL      = 0x08,
++    PIPE_REG_SIZE         = 0x0c,
++    PIPE_REG_ADDRESS      = 0x10,
++    PIPE_REG_WAKES        = 0x14,
++    PIPE_REG_CHANNEL_HIGH = 0x30,
++    PIPE_REG_ADDRESS_HIGH = 0x34,
++};
++enum {
++    PIPE_CMD_OPEN = 1, PIPE_CMD_CLOSE, PIPE_CMD_POLL, PIPE_CMD_WRITE_BUFFER,
++    PIPE_CMD_WAKE_ON_WRITE, PIPE_CMD_READ_BUFFER, PIPE_CMD_WAKE_ON_READ,
++};
++#define PIPE_ERROR_INVAL  (-1)
++#define PIPE_ERROR_AGAIN  (-2)
++#define PIPE_ERROR_IO     (-4)
++#define PIPE_WAKE_CLOSED  (1 << 0)
++#define PIPE_WAKE_READ    (1 << 1)
++#define PIPE_WAKE_WRITE   (1 << 2)
++#define PIPE_POLL_IN      (1 << 0)
++#define PIPE_POLL_OUT     (1 << 1)
++#define PIPE_POLL_HUP     (1 << 2)
++#define PIPE_MAX_XFER     (256 * 1024)
++
++OBJECT_DECLARE_SIMPLE_TYPE(GoldfishPipeState, GOLDFISH_PIPE)
++
++typedef struct GoldfishPipe {
++    GoldfishPipeState *dev;
++    uint64_t channel;
++    int fd;                 /* -1 until the service name has been received */
++    bool closed;            /* closed by the host side */
++    uint32_t wanted;        /* PIPE_WAKE_* the guest asked to be woken for */
++    uint32_t wakes;         /* pending PIPE_WAKE_* to report */
++    bool signalled;         /* queued in dev->signalled */
++    char name[64];
++    unsigned name_len;
++    QTAILQ_ENTRY(GoldfishPipe) next_signalled;
++} GoldfishPipe;
++
++struct GoldfishPipeState {
++    SysBusDevice parent_obj;
++    MemoryRegion iomem;
++    qemu_irq irq;
++    char *socket_path;
++    GHashTable *pipes;      /* channel -> GoldfishPipe */
++    QTAILQ_HEAD(, GoldfishPipe) signalled;
++    uint64_t channel, address;
++    uint32_t size, status;
++    uint8_t *xfer;
++};
++
++static void goldfish_pipe_update_handlers(GoldfishPipe *p);
++
++static void goldfish_pipe_signal(GoldfishPipe *p, uint32_t wakes)
++{
++    GoldfishPipeState *s = p->dev;
++    p->wakes |= wakes;
++    if (!p->signalled) {
++        p->signalled = true;
++        QTAILQ_INSERT_TAIL(&s->signalled, p, next_signalled);
++    }
++    qemu_set_irq(s->irq, 1);
++}
++
++static void goldfish_pipe_fd_readable(void *opaque)
++{
++    GoldfishPipe *p = opaque;
++    p->wanted &= ~PIPE_WAKE_READ;
++    goldfish_pipe_update_handlers(p);
++    goldfish_pipe_signal(p, PIPE_WAKE_READ);
++}
++
++static void goldfish_pipe_fd_writable(void *opaque)
++{
++    GoldfishPipe *p = opaque;
++    p->wanted &= ~PIPE_WAKE_WRITE;
++    goldfish_pipe_update_handlers(p);
++    goldfish_pipe_signal(p, PIPE_WAKE_WRITE);
++}
++
++static void goldfish_pipe_update_handlers(GoldfishPipe *p)
++{
++    if (p->fd < 0) {
++        return;
++    }
++    qemu_set_fd_handler(p->fd,
++                        (p->wanted & PIPE_WAKE_READ) ? goldfish_pipe_fd_readable : NULL,
++                        (p->wanted & PIPE_WAKE_WRITE) ? goldfish_pipe_fd_writable : NULL,
++                        p);
++}
++
++static void goldfish_pipe_host_close(GoldfishPipe *p)
++{
++    if (p->fd >= 0) {
++        qemu_set_fd_handler(p->fd, NULL, NULL, NULL);
++        close(p->fd);
++        p->fd = -1;
++    }
++    p->closed = true;
++    p->wanted = 0;
++}
++
++static void goldfish_pipe_free(gpointer data)
++{
++    GoldfishPipe *p = data;
++    if (p->signalled) {
++        QTAILQ_REMOVE(&p->dev->signalled, p, next_signalled);
++    }
++    goldfish_pipe_host_close(p);
++    g_free(p);
++}
++
++/* The first bytes written to a new pipe are "pipe:<service>[:<args>]\0" */
++static int32_t goldfish_pipe_connect(GoldfishPipe *p, const uint8_t *buf,
++                                     uint32_t len)
++{
++    GoldfishPipeState *s = p->dev;
++    const uint8_t *nul = memchr(buf, 0, len);
++    uint32_t take = nul ? nul - buf + 1 : len;
++    Error *err = NULL;
++
++    if (p->name_len + take > sizeof(p->name)) {
++        goldfish_pipe_host_close(p);
++        return PIPE_ERROR_INVAL;
++    }
++    memcpy(p->name + p->name_len, buf, take);
++    p->name_len += take;
++    if (!nul) {
++        return take;
++    }
++    if (!g_str_has_prefix(p->name, "pipe:opengles") || !s->socket_path) {
++        goldfish_pipe_host_close(p);
++        return PIPE_ERROR_INVAL;
++    }
++    p->fd = unix_connect(s->socket_path, &err);
++    if (p->fd < 0) {
++        warn_report("goldfish-pipe: cannot reach the GLES renderer: %s",
++                    error_get_pretty(err));
++        error_free(err);
++        goldfish_pipe_host_close(p);
++        return PIPE_ERROR_IO;
++    }
++    g_unix_set_fd_nonblocking(p->fd, true, NULL);
++    return take;
++}
++
++static int32_t goldfish_pipe_xfer(GoldfishPipe *p, bool is_write,
++                                  hwaddr addr, uint32_t len)
++{
++    GoldfishPipeState *s = p->dev;
++    ssize_t n;
++
++    if (p->closed) {
++        return PIPE_ERROR_IO;
++    }
++    len = MIN(len, PIPE_MAX_XFER);
++    if (!len) {
++        return 0;
++    }
++    if (is_write) {
++        address_space_read(&address_space_memory, addr, MEMTXATTRS_UNSPECIFIED,
++                           s->xfer, len);
++        if (p->fd < 0) {
++            return goldfish_pipe_connect(p, s->xfer, len);
++        }
++        do {
++            n = send(p->fd, s->xfer, len, MSG_DONTWAIT | MSG_NOSIGNAL);
++        } while (n < 0 && errno == EINTR);
++    } else {
++        if (p->fd < 0) {
++            return PIPE_ERROR_INVAL;
++        }
++        do {
++            n = recv(p->fd, s->xfer, len, MSG_DONTWAIT);
++        } while (n < 0 && errno == EINTR);
++        if (n > 0) {
++            address_space_write(&address_space_memory, addr,
++                                MEMTXATTRS_UNSPECIFIED, s->xfer, n);
++        }
++    }
++    if (n < 0) {
++        if (errno == EAGAIN || errno == EWOULDBLOCK) {
++            return PIPE_ERROR_AGAIN;
++        }
++        goldfish_pipe_host_close(p);
++        return PIPE_ERROR_IO;
++    }
++    if (n == 0 && !is_write) {
++        goldfish_pipe_host_close(p);    /* renderer went away: EOF */
++    }
++    return n;
++}
++
++static void goldfish_pipe_command(GoldfishPipeState *s, uint32_t cmd)
++{
++    GoldfishPipe *p = g_hash_table_lookup(s->pipes, &s->channel);
++
++    if (cmd == PIPE_CMD_OPEN) {
++        if (p) {
++            s->status = PIPE_ERROR_INVAL;
++            return;
++        }
++        p = g_new0(GoldfishPipe, 1);
++        p->dev = s;
++        p->channel = s->channel;
++        p->fd = -1;
++        g_hash_table_insert(s->pipes, &p->channel, p);
++        s->status = 0;
++        return;
++    }
++    if (!p) {
++        s->status = PIPE_ERROR_INVAL;
++        return;
++    }
++    switch (cmd) {
++    case PIPE_CMD_CLOSE:
++        g_hash_table_remove(s->pipes, &p->channel);
++        break;
++    case PIPE_CMD_POLL: {
++        uint32_t st = 0;
++        if (p->closed) {
++            st = PIPE_POLL_HUP;
++        } else if (p->fd < 0) {
++            st = PIPE_POLL_OUT;
++        } else {
++            struct pollfd pfd = { .fd = p->fd, .events = POLLIN | POLLOUT };
++            if (poll(&pfd, 1, 0) > 0) {
++                st |= (pfd.revents & POLLIN) ? PIPE_POLL_IN : 0;
++                st |= (pfd.revents & POLLOUT) ? PIPE_POLL_OUT : 0;
++                st |= (pfd.revents & (POLLHUP | POLLERR)) ? PIPE_POLL_HUP : 0;
++            }
++        }
++        s->status = st;
++        break;
++    }
++    case PIPE_CMD_WRITE_BUFFER:
++        s->status = goldfish_pipe_xfer(p, true, s->address, s->size);
++        break;
++    case PIPE_CMD_READ_BUFFER:
++        s->status = goldfish_pipe_xfer(p, false, s->address, s->size);
++        break;
++    case PIPE_CMD_WAKE_ON_READ:
++    case PIPE_CMD_WAKE_ON_WRITE:
++        if (p->closed || p->fd < 0) {
++            goldfish_pipe_signal(p, PIPE_WAKE_CLOSED);
++        } else {
++            p->wanted |= cmd == PIPE_CMD_WAKE_ON_READ ? PIPE_WAKE_READ
++                                                      : PIPE_WAKE_WRITE;
++            goldfish_pipe_update_handlers(p);
++        }
++        break;
++    default:
++        s->status = PIPE_ERROR_INVAL;
++    }
++}
++
++static uint64_t goldfish_pipe_read(void *opaque, hwaddr offset, unsigned size)
++{
++    GoldfishPipeState *s = opaque;
++    GoldfishPipe *p = QTAILQ_FIRST(&s->signalled);
++
++    switch (offset) {
++    case PIPE_REG_STATUS:
++        return s->status;
++    case PIPE_REG_CHANNEL:
++        /* interrupt handler: next signalled pipe, 0 = none left */
++        if (!p) {
++            qemu_set_irq(s->irq, 0);
++            return 0;
++        }
++        return (uint32_t)p->channel;
++    case PIPE_REG_CHANNEL_HIGH:
++        return p ? p->channel >> 32 : 0;
++    case PIPE_REG_WAKES: {
++        uint32_t wakes = 0;
++        if (p) {
++            wakes = p->wakes;
++            p->wakes = 0;
++            p->signalled = false;
++            QTAILQ_REMOVE(&s->signalled, p, next_signalled);
++        }
++        if (QTAILQ_EMPTY(&s->signalled)) {
++            qemu_set_irq(s->irq, 0);
++        }
++        return wakes;
++    }
++    default:
++        return 0;   /* incl. PARAMS_ADDR: batch access not supported */
++    }
++}
++
++static void goldfish_pipe_write(void *opaque, hwaddr offset, uint64_t val,
++                                unsigned size)
++{
++    GoldfishPipeState *s = opaque;
++
++    switch (offset) {
++    case PIPE_REG_COMMAND:
++        goldfish_pipe_command(s, val);
++        break;
++    case PIPE_REG_CHANNEL:
++        s->channel = deposit64(s->channel, 0, 32, val);
++        break;
++    case PIPE_REG_CHANNEL_HIGH:
++        s->channel = deposit64(s->channel, 32, 32, val);
++        break;
++    case PIPE_REG_SIZE:
++        s->size = val;
++        break;
++    case PIPE_REG_ADDRESS:
++        s->address = deposit64(s->address, 0, 32, val);
++        break;
++    case PIPE_REG_ADDRESS_HIGH:
++        s->address = deposit64(s->address, 32, 32, val);
++        break;
++    default:
++        break;
++    }
++}
++
++static const MemoryRegionOps goldfish_pipe_ops = {
++    .read = goldfish_pipe_read,
++    .write = goldfish_pipe_write,
++    .endianness = DEVICE_LITTLE_ENDIAN,
++    .valid = { .min_access_size = 4, .max_access_size = 4 },
++};
++
++static void goldfish_pipe_realize(DeviceState *dev, Error **errp)
++{
++    GoldfishPipeState *s = GOLDFISH_PIPE(dev);
++    memory_region_init_io(&s->iomem, OBJECT(s), &goldfish_pipe_ops, s,
++                          "goldfish-pipe", 0x1000);
++    sysbus_init_mmio(SYS_BUS_DEVICE(dev), &s->iomem);
++    sysbus_init_irq(SYS_BUS_DEVICE(dev), &s->irq);
++    s->pipes = g_hash_table_new_full(g_int64_hash, g_int64_equal, NULL,
++                                     goldfish_pipe_free);
++    QTAILQ_INIT(&s->signalled);
++    s->xfer = g_malloc(PIPE_MAX_XFER);
++}
++
++static void goldfish_pipe_reset(DeviceState *dev)
++{
++    GoldfishPipeState *s = GOLDFISH_PIPE(dev);
++    g_hash_table_remove_all(s->pipes);
++    s->channel = s->address = 0;
++    s->size = s->status = 0;
++    qemu_set_irq(s->irq, 0);
++}
++
++static const Property goldfish_pipe_properties[] = {
++    DEFINE_PROP_STRING("socket", GoldfishPipeState, socket_path),
++};
++
++static void goldfish_pipe_class_init(ObjectClass *klass, const void *data)
++{
++    DeviceClass *dc = DEVICE_CLASS(klass);
++    dc->realize = goldfish_pipe_realize;
++    device_class_set_legacy_reset(dc, goldfish_pipe_reset);
++    device_class_set_props(dc, goldfish_pipe_properties);
++}
++
 +static const TypeInfo android_goldfish_types[] = {
 +    {
 +        .name = TYPE_GOLDFISH_FB,
@@ -861,6 +1241,11 @@ index 0000000..e7afa43
 +        .parent = TYPE_SYS_BUS_DEVICE,
 +        .instance_size = sizeof(GoldfishAudioState),
 +        .class_init = goldfish_audio_class_init,
++    }, {
++        .name = TYPE_GOLDFISH_PIPE,
++        .parent = TYPE_SYS_BUS_DEVICE,
++        .instance_size = sizeof(GoldfishPipeState),
++        .class_init = goldfish_pipe_class_init,
 +    },
 +};
 +
@@ -877,7 +1262,7 @@ index 4233a80..756df22 100644
  arm_common_ss.add(when: 'CONFIG_DIGIC', if_true: files('digic_boards.c'))
  arm_common_ss.add(when: 'CONFIG_EMCRAFT_SF2', if_true: files('msf2-som.c'))
 diff --git a/hw/arm/virt.c b/hw/arm/virt.c
-index 219597c..37bb789 100644
+index 219597c..2f3ab49 100644
 --- a/hw/arm/virt.c
 +++ b/hw/arm/virt.c
 @@ -36,6 +36,7 @@
@@ -888,7 +1273,7 @@ index 219597c..37bb789 100644
  #include "hw/arm/virt.h"
  #include "hw/arm/machines-qom.h"
  #include "hw/block/flash.h"
-@@ -211,6 +212,11 @@ static const MemMapEntry base_memmap[] = {
+@@ -211,6 +212,12 @@ static const MemMapEntry base_memmap[] = {
      [VIRT_PVTIME] =             { 0x090a0000, 0x00010000 },
      [VIRT_SECURE_GPIO] =        { 0x090b0000, 0x00001000 },
      [VIRT_ACPI_PCIHP] =         { 0x090c0000, ACPI_PCIHP_SIZE },
@@ -897,10 +1282,11 @@ index 219597c..37bb789 100644
 +    [VIRT_GOLDFISH_EVENTS] =    { 0x09110000, 0x00001000 },
 +    [VIRT_GOLDFISH_BATTERY] =   { 0x09120000, 0x00001000 },
 +    [VIRT_GOLDFISH_AUDIO] =     { 0x09130000, 0x00001000 },
++    [VIRT_GOLDFISH_PIPE] =      { 0x09140000, 0x00001000 },
      [VIRT_MMIO] =               { 0x0a000000, 0x00000200 },
      /* ...repeating for a total of NUM_VIRTIO_TRANSPORTS, each of that size */
      [VIRT_PLATFORM_BUS] =       { 0x0c000000, 0x02000000 },
-@@ -268,6 +274,10 @@ static const int a15irqmap[] = {
+@@ -268,6 +275,11 @@ static const int a15irqmap[] = {
      [VIRT_UART1] = 8,
      [VIRT_ACPI_GED] = 9,
      [VIRT_GWDT_WS0] = 10,
@@ -908,10 +1294,11 @@ index 219597c..37bb789 100644
 +    [VIRT_GOLDFISH_EVENTS] = 12,
 +    [VIRT_GOLDFISH_BATTERY] = 13,
 +    [VIRT_GOLDFISH_AUDIO] = 14,
++    [VIRT_GOLDFISH_PIPE] = 15,
      [VIRT_MMIO] = 16, /* ...to 16 + NUM_VIRTIO_TRANSPORTS - 1 */
      [VIRT_GIC_V2M] = 48, /* ...to 48 + NUM_GICV2M_SPIS - 1 */
      [VIRT_SMMU] = 74,    /* ...to 74 + NUM_SMMU_IRQS - 1 */
-@@ -1576,6 +1586,61 @@ static void create_rtc(const VirtMachineState *vms)
+@@ -1576,6 +1588,62 @@ static void create_rtc(const VirtMachineState *vms)
      g_free(nodename);
  }
  
@@ -935,6 +1322,7 @@ index 219597c..37bb789 100644
 +        { VIRT_GOLDFISH_BATTERY, TYPE_GOLDFISH_BATTERY,
 +          "generic,goldfish-battery" },
 +        { VIRT_GOLDFISH_AUDIO, TYPE_GOLDFISH_AUDIO, "generic,goldfish-audio" },
++        { VIRT_GOLDFISH_PIPE, TYPE_GOLDFISH_PIPE, "generic,android-pipe" },
 +    };
 +    MachineState *ms = MACHINE(vms);
 +
@@ -973,7 +1361,7 @@ index 219597c..37bb789 100644
  static DeviceState *gpio_key_dev;
  static void virt_powerdown_req(Notifier *n, void *opaque)
  {
-@@ -3208,6 +3273,10 @@ static void machvirt_init(MachineState *machine)
+@@ -3208,6 +3276,10 @@ static void machvirt_init(MachineState *machine)
  
      create_rtc(vms);
  
@@ -984,7 +1372,7 @@ index 219597c..37bb789 100644
      create_pcie(vms);
      create_cxl_host_reg_region(vms);
  
-@@ -3504,6 +3573,16 @@ static void virt_set_virtio_transports(Object *obj, Visitor *v,
+@@ -3504,6 +3576,16 @@ static void virt_set_virtio_transports(Object *obj, Visitor *v,
      vms->virtio_transports = transports;
  }
  
@@ -1001,7 +1389,7 @@ index 219597c..37bb789 100644
  static bool virt_get_dtb_randomness(Object *obj, Error **errp)
  {
      VirtMachineState *vms = VIRT_MACHINE(obj);
-@@ -4318,6 +4397,13 @@ static void virt_machine_class_init(ObjectClass *oc, const void *data)
+@@ -4318,6 +4400,13 @@ static void virt_machine_class_init(ObjectClass *oc, const void *data)
                                            "Set MSI settings. "
                                            "Valid values are auto, gicv2m, its and off");
  
@@ -1017,10 +1405,10 @@ index 219597c..37bb789 100644
                                     virt_set_dtb_randomness);
 diff --git a/include/hw/arm/android-goldfish.h b/include/hw/arm/android-goldfish.h
 new file mode 100644
-index 0000000..c9e8f12
+index 0000000..31bd1a1
 --- /dev/null
 +++ b/include/hw/arm/android-goldfish.h
-@@ -0,0 +1,13 @@
+@@ -0,0 +1,14 @@
 +/*
 + * Goldfish platform devices for Android emulator guest kernels on 'virt'.
 + * SPDX-License-Identifier: GPL-2.0-or-later
@@ -1032,13 +1420,14 @@ index 0000000..c9e8f12
 +#define TYPE_GOLDFISH_EVENTS  "goldfish-events"
 +#define TYPE_GOLDFISH_BATTERY "goldfish-battery"
 +#define TYPE_GOLDFISH_AUDIO   "goldfish-audio"
++#define TYPE_GOLDFISH_PIPE    "goldfish-pipe"
 +
 +#endif
 diff --git a/include/hw/arm/virt.h b/include/hw/arm/virt.h
-index 22e66d1..d888c25 100644
+index 22e66d1..392ad62 100644
 --- a/include/hw/arm/virt.h
 +++ b/include/hw/arm/virt.h
-@@ -100,6 +100,10 @@ enum {
+@@ -100,6 +100,11 @@ enum {
      VIRT_GWDT_WS0,
      VIRT_GWDT_REFRESH,
      VIRT_GWDT_CONTROL,
@@ -1046,10 +1435,11 @@ index 22e66d1..d888c25 100644
 +    VIRT_GOLDFISH_EVENTS,
 +    VIRT_GOLDFISH_BATTERY,
 +    VIRT_GOLDFISH_AUDIO,
++    VIRT_GOLDFISH_PIPE,
      VIRT_LOWMEMMAP_LAST,
  };
  
-@@ -177,6 +181,7 @@ struct VirtMachineState {
+@@ -177,6 +182,7 @@ struct VirtMachineState {
      bool ras;
      bool mte;
      bool dtb_randomness;

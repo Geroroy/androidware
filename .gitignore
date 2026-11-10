@@ -10,3 +10,4 @@ dist/test-guest/
 dist/android-guest/
 experiments/android-guest/gles1-test/build/
 __pycache__/
+experiments/android-guest/gles2-test/build/

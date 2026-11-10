@@ -73,12 +73,22 @@ public final class GuestMedia {
             + "on property:sys.boot_completed=1\n"
             + "    start aw-install\n";
 
-    public static void buildRamdisk(File original, File out) throws IOException {
+    /**
+     * @param hostGles true when the guest will use the host GLES renderer (kernel arg qemu.gles=1):
+     *        advertises OpenGL ES 2.0 to apps via ro.opengles.version (the emulator normally sets
+     *        this through its qemud boot-properties service, which this engine does not have).
+     */
+    public static void buildRamdisk(File original, File out, boolean hostGles) throws IOException {
         byte[] orig = Files.readAllBytes(original.toPath());
         byte[] rc = cpioFind(gunzip(orig), "init.ranchu.rc");
         if (rc == null) throw new IOException("init.ranchu.rc not found in " + original);
         ByteArrayOutputStream cpio = new ByteArrayOutputStream();
         cpioAdd(cpio, "init.ranchu.rc", 0100750, (new String(rc, StandardCharsets.UTF_8) + RC_ADDITION).getBytes(StandardCharsets.UTF_8));
+        if (hostGles) {
+            byte[] dp = cpioFind(gunzip(orig), "default.prop");
+            if (dp == null) throw new IOException("default.prop not found in " + original);
+            cpioAdd(cpio, "default.prop", 0100644, (new String(dp, StandardCharsets.UTF_8) + "\nro.opengles.version=131072\n").getBytes(StandardCharsets.UTF_8));
+        }
         cpioAdd(cpio, "aw-install.sh", 0100750, INSTALL_SCRIPT.getBytes(StandardCharsets.UTF_8));
         cpioAdd(cpio, "TRAILER!!!", 0, new byte[0]);
         try (OutputStream o = new FileOutputStream(out)) {

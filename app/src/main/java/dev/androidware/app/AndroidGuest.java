@@ -71,7 +71,7 @@ public final class AndroidGuest {
      */
     public static String prepareBoot(Context ctx) throws IOException {
         File d = dir(ctx);
-        GuestMedia.buildRamdisk(new File(d, "ramdisk.img"), new File(d, "ramdisk-aw.img"));
+        GuestMedia.buildRamdisk(new File(d, "ramdisk.img"), new File(d, "ramdisk-aw.img"), false);
         File sd = new File(d, "sdcard.img");
         if (!sd.isFile()) {
             try (InputStream in = ctx.getAssets().open("androidguest/sdcard.img.gz")) { GuestMedia.extractSparseGz(in, sd); }

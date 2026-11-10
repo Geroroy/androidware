@@ -19,10 +19,14 @@ if os.environ.get('FULL'):
     full = ['-drive', f'if=none,id=xfer,file={wd}/transfer.img,format=raw,readonly=on', '-device', 'virtio-blk-device,drive=xfer',
             '-drive', f'if=none,id=sd,file={wd}/sdcard.img,format=raw', '-device', 'virtio-blk-device,drive=sd',
             '-chardev', f'file,id=aud,path={wd}/audio.raw', '-global', 'goldfish-audio.chardev=aud']
+# GLSOCK=<unix socket of a running aw-gl-renderer>: host GLES path (qemu.gles=1, opengles pipe); use RAMDISK=ramdisk-gl.img
+glsock = os.environ.get('GLSOCK')
+if glsock:
+    full += ['-global', 'goldfish-pipe.socket=' + glsock]
 args = [qemu, '-M', 'virt,highmem=off,goldfish=on', '-cpu', 'cortex-a15', '-smp', os.environ.get('SMP', '4'),
         '-m', '1024', '-accel', 'tcg,thread=multi', '-no-reboot',
         '-kernel', f'{wd}/kernel-ranchu', '-initrd', f"{wd}/{os.environ.get('RAMDISK', 'ramdisk.img')}",
-        '-append', 'console=ttyAMA0 androidboot.console=ttyAMA0 androidboot.hardware=ranchu qemu=1 qemu.gles=0 '
+        '-append', 'console=ttyAMA0 androidboot.console=ttyAMA0 androidboot.hardware=ranchu qemu=1 qemu.gles=' + ('1 ' if glsock else '0 ') +
                    'androidboot.selinux=permissive ' + os.environ.get('EXTRA_APPEND', ''),
         *full,
         '-drive', f'if=none,id=data,file={wd}/userdata.img,format=raw', '-device', 'virtio-blk-device,drive=data',
