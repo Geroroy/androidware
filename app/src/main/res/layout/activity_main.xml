@@ -20,19 +20,18 @@
         android:padding="6dp"
         android:background="#202020">
 
-        <HorizontalScrollView android:layout_width="match_parent" android:layout_height="wrap_content">
-            <LinearLayout android:layout_width="wrap_content" android:layout_height="wrap_content" android:orientation="horizontal">
-                <Button android:id="@+id/btn_host" android:text="@string/btn_host_info" android:layout_width="wrap_content" android:layout_height="wrap_content" />
-                <Button android:id="@+id/btn_selftest" android:text="@string/btn_selftest" android:layout_width="wrap_content" android:layout_height="wrap_content" />
-                <Button android:id="@+id/btn_kernel" android:text="@string/btn_import_kernel" android:layout_width="wrap_content" android:layout_height="wrap_content" />
-                <Button android:id="@+id/btn_initrd" android:text="@string/btn_import_initrd" android:layout_width="wrap_content" android:layout_height="wrap_content" />
-                <Button android:id="@+id/btn_disk" android:text="@string/btn_import_disk" android:layout_width="wrap_content" android:layout_height="wrap_content" />
-                <Button android:id="@+id/btn_apk" android:text="@string/btn_inspect_apk" android:layout_width="wrap_content" android:layout_height="wrap_content" />
-                <Button android:id="@+id/btn_start" android:text="@string/btn_start" android:layout_width="wrap_content" android:layout_height="wrap_content" />
-                <Button android:id="@+id/btn_stop" android:text="@string/btn_stop" android:layout_width="wrap_content" android:layout_height="wrap_content" />
-                <Button android:id="@+id/btn_export" android:text="@string/btn_export_log" android:layout_width="wrap_content" android:layout_height="wrap_content" />
-            </LinearLayout>
-        </HorizontalScrollView>
+        <!-- 3-column grid so every button is visible without scrolling -->
+        <GridLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:columnCount="3">
+            <Button android:id="@+id/btn_host" android:text="@string/btn_host_info" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_columnWeight="1" android:textSize="11sp" android:textAllCaps="false" android:minHeight="40dp" />
+            <Button android:id="@+id/btn_selftest" android:text="@string/btn_selftest" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_columnWeight="1" android:textSize="11sp" android:textAllCaps="false" android:minHeight="40dp" />
+            <Button android:id="@+id/btn_export" android:text="@string/btn_export_log" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_columnWeight="1" android:textSize="11sp" android:textAllCaps="false" android:minHeight="40dp" />
+            <Button android:id="@+id/btn_kernel" android:text="@string/btn_import_kernel" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_columnWeight="1" android:textSize="11sp" android:textAllCaps="false" android:minHeight="40dp" />
+            <Button android:id="@+id/btn_initrd" android:text="@string/btn_import_initrd" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_columnWeight="1" android:textSize="11sp" android:textAllCaps="false" android:minHeight="40dp" />
+            <Button android:id="@+id/btn_disk" android:text="@string/btn_import_disk" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_columnWeight="1" android:textSize="11sp" android:textAllCaps="false" android:minHeight="40dp" />
+            <Button android:id="@+id/btn_apk" android:text="@string/btn_inspect_apk" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_columnWeight="1" android:textSize="11sp" android:textAllCaps="false" android:minHeight="40dp" />
+            <Button android:id="@+id/btn_start" android:text="@string/btn_start" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_columnWeight="1" android:textSize="11sp" android:textAllCaps="false" android:minHeight="40dp" />
+            <Button android:id="@+id/btn_stop" android:text="@string/btn_stop" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_columnWeight="1" android:textSize="11sp" android:textAllCaps="false" android:minHeight="40dp" />
+        </GridLayout>
 
         <ScrollView android:id="@+id/log_scroll" android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1">
             <TextView android:id="@+id/log" android:layout_width="match_parent" android:layout_height="wrap_content"
