@@ -52,3 +52,10 @@
 - 기기 실행: **미검증**(이 세션에 기기 없음). 첫 측정 항목은 앱의 "Host check"와 "Engine self-test"(qemu-arm으로 32비트 bionic 벤치를 돌려 Oryon 위 TCG 성능을 잰다), 그다음 `device-test-procedure.md`의 게스트 커널 부팅이다.
 - 이 세션 환경 특이사항: dl.google.com/qemu.org/source.android.com/gitlab.freedesktop.org 차단 → NDK는 Docker Hub 이미지에서 추출, AOSP 소스는 LineageOS 미러, 의존성 소스는 Ubuntu deb-src 사용. 재현 스크립트는 네트워크가 정상인 환경을 가정한다.
 - 알려진 미완: `scripts/build-engine.sh`는 이 세션의 수동 단계를 옮겨 적은 것이며 처음부터 끝까지 한 번에 실행해 검증하지는 않았다(각 단계는 개별 실행으로 성공). 다음 작업자는 깨끗한 환경에서 전체 실행을 한 번 확인해야 한다.
+
+## 기기 실측 1차 (2026-11-10, Galaxy S25 Ultra, 사용자 스크린샷)
+
+- CPU implementer 0x51 / part 0x001 (Qualcomm Oryon), page size 4096, `/dev/kvm: absent`, `android.software.virtualization_framework: true`(앱은 사용 불가, F5).
+- `nativeLibraryDir`의 `libqemu-system-aarch64.so --version` 실행 **성공** (QEMU 11.1.3, exit 0, 150 ms). 비루팅 앱에서 엔진 exec 가능함을 기기에서 확인.
+- `qemu-arm`으로 32비트 bionic 벤치 실행 **실패**: `error setting PER_LINUX32 personality: Invalid argument` → abort(exit 134). 원인: 64비트 전용 커널이 `personality(PER_LINUX32)`를 EINVAL로 거부하고 32비트 bionic이 시작 시 이를 필수로 요구. 조치: 패치 `0023-android-emulate-personality.patch`(QEMU가 persona를 자체 보관). 재측정 대기 중.
+- UI: 버튼 3열 그리드, 세로보기 지원(0.0.3-m0).

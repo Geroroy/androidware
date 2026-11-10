@@ -1,0 +1,27 @@
+--- a/linux-user/syscall.c
++++ b/linux-user/syscall.c
+@@ -11923,7 +11923,24 @@
+     case TARGET_NR_fchdir:
+         return get_errno(fchdir(arg1));
+     case TARGET_NR_personality:
++#ifdef __ANDROID__
++        {
++            /*
++             * 64-bit-only Android kernels reject PER_LINUX32 with EINVAL, and
++             * 32-bit bionic aborts at startup when it cannot set it. The guest
++             * is emulated anyway, so keep the persona in QEMU instead of
++             * asking the host kernel.
++             */
++            static abi_ulong emulated_persona;
++            abi_ulong prev = qatomic_read(&emulated_persona);
++            if ((abi_ulong)arg1 != 0xffffffffu) {
++                qatomic_set(&emulated_persona, (abi_ulong)arg1);
++            }
++            return prev;
++        }
++#else
+         return get_errno(personality(arg1));
++#endif
+ #ifdef TARGET_NR__llseek /* Not on alpha */
+     case TARGET_NR__llseek:
+         {

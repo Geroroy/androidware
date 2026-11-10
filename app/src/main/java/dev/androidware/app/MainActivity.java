@@ -38,7 +38,8 @@ public class MainActivity extends Activity implements EngineService.LogListener,
     private TextView logView;
     private ScrollView logScroll;
     private VncView vnc;
-    private final ArrayDeque<String> lines = new ArrayDeque<>();
+    // static: the on-screen log survives activity recreation (rotation)
+    private static final ArrayDeque<String> lines = new ArrayDeque<>();
     private final Handler ui = new Handler(Looper.getMainLooper());
     private final ExecutorService io = Executors.newSingleThreadExecutor();
     private EngineService service;
@@ -79,7 +80,7 @@ public class MainActivity extends Activity implements EngineService.LogListener,
             startActivityForResult(i, REQ_EXPORT);
         });
 
-        log("androidware M0 build; profile=" + profile.name + " kernel=" + profile.kernel + " initrd=" + profile.initrd + " disk=" + profile.disk);
+        log("androidware 0.0.3-m0; profile=" + profile.name + " kernel=" + profile.kernel + " initrd=" + profile.initrd + " disk=" + profile.disk);
         Intent svc = new Intent(this, EngineService.class);
         bindService(svc, conn, Context.BIND_AUTO_CREATE);
     }
