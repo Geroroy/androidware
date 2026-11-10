@@ -1,3 +1,4 @@
+#include <atomic>
 // awgl - C API over emugl's libOpenglRender internals.
 //
 // This file replaces upstream's render_api.cpp (which is not compiled):
@@ -299,6 +300,10 @@ void awgl_stop(void) {
     delete s_postHook;
     s_postHook = NULL;
 }
+
+static std::atomic<unsigned long> g_awgl_posts(0);
+extern "C" void awgl_note_post(void) { g_awgl_posts.fetch_add(1, std::memory_order_relaxed); }
+unsigned long awgl_get_post_count(void) { return g_awgl_posts.load(std::memory_order_relaxed); }
 
 void awgl_get_gl_strings(const char** vendor, const char** renderer,
                          const char** version) {

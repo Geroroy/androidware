@@ -68,6 +68,10 @@ AWGL_API void awgl_stop(void);
 AWGL_API void awgl_get_gl_strings(const char **vendor, const char **renderer,
                                   const char **version);
 
+/* Number of frames the guest has posted to the screen since the library was
+ * loaded (monotonic; for fps readouts). */
+AWGL_API unsigned long awgl_get_post_count(void);
+
 #ifdef __cplusplus
 }
 #endif

@@ -203,9 +203,24 @@ public class VncView extends View {
         return new int[]{(int) gx, (int) gy};
     }
 
+    /** Android guest: touches go over QMP as multi-touch (see TouchInjector). Null = RFB single pointer. */
+    private volatile java.io.File multiTouchSocket;
+    public void setMultiTouchSocket(java.io.File qmpSocket) { multiTouchSocket = qmpSocket; }
+
     @Override public boolean onTouchEvent(MotionEvent e) {
         DataOutputStream o; synchronized (this) { o = out; }
         if (o == null) return true;
+        java.io.File mt = multiTouchSocket;
+        if (mt != null && fb != null && dst.width() > 0) {
+            int n = e.getPointerCount();
+            float[] gx = new float[n], gy = new float[n];
+            for (int i = 0; i < n; i++) {
+                gx[i] = Math.max(0, Math.min(fbW - 1, (e.getX(i) - dst.left) / dst.width() * fbW));
+                gy[i] = Math.max(0, Math.min(fbH - 1, (e.getY(i) - dst.top) / dst.height() * fbH));
+            }
+            TouchInjector.send(mt, e, gx, gy, fbW, fbH);
+            return true;
+        }
         int[] g = toGuest(e.getX(), e.getY());
         int buttons;
         switch (e.getActionMasked()) {

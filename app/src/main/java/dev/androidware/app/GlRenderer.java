@@ -39,4 +39,8 @@ public final class GlRenderer {
     private static native int nativeSetSurface(Surface surface, int width, int height);
     private static native void nativeStop();
     private static native String nativeGlStrings();
+    private static native long nativeFrameCount();
+
+    /** Frames the guest has posted to the screen so far (for the fps readout); 0 when not running. */
+    public static synchronized long frameCount() { return running ? nativeFrameCount() : 0; }
 }

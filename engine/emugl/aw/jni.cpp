@@ -30,6 +30,10 @@ JNIEXPORT void JNICALL Java_dev_androidware_app_GlRenderer_nativeStop(JNIEnv *, 
     awgl_stop();
 }
 
+JNIEXPORT jlong JNICALL Java_dev_androidware_app_GlRenderer_nativeFrameCount(JNIEnv *, jclass) {
+    return (jlong)awgl_get_post_count();
+}
+
 JNIEXPORT jstring JNICALL Java_dev_androidware_app_GlRenderer_nativeGlStrings(JNIEnv *env, jclass) {
     const char *v = "", *r = "", *ver = "";
     awgl_get_gl_strings(&v, &r, &ver);

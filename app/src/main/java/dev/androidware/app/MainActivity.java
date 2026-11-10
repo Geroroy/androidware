@@ -98,7 +98,7 @@ public class MainActivity extends Activity implements EngineService.LogListener,
             startActivityForResult(i, REQ_EXPORT);
         });
 
-        log("androidware 0.0.13-m1; profile=" + profile.name + " kernel=" + profile.kernel + " initrd=" + profile.initrd + " disk=" + profile.disk);
+        log("androidware 0.0.14-m1; profile=" + profile.name + " kernel=" + profile.kernel + " initrd=" + profile.initrd + " disk=" + profile.disk);
         Intent svc = new Intent(this, EngineService.class);
         bindService(svc, conn, Context.BIND_AUTO_CREATE);
     }
@@ -229,7 +229,8 @@ public class MainActivity extends Activity implements EngineService.LogListener,
                 "Import armeabi-v7a-24_r07.zip",
                 "Factory reset guest data",
                 "Resolution… (now " + AndroidGuest.DISPLAY_LABELS[AndroidGuest.displayMode(this)] + ")",
-                "Graphics: " + (AndroidGuest.hostGpu(this) ? "Host GPU, GLES 2.0 (tap for Software)" : "Software, GLES 1.x (tap for Host GPU)")};
+                "Graphics: " + (AndroidGuest.hostGpu(this) ? "Host GPU, GLES 2.0 (tap for Software)" : "Software, GLES 1.x (tap for Host GPU)"),
+                "Guest CPUs… (now " + AndroidGuest.cpus(this) + ")"};
         new android.app.AlertDialog.Builder(this)
                 .setTitle("Android 7.0 guest (" + (AndroidGuest.isInstalled(this) ? "installed" : "not installed") + ")")
                 .setItems(items, (d, which) -> {
@@ -256,6 +257,16 @@ public class MainActivity extends Activity implements EngineService.LogListener,
                             AndroidGuest.setHostGpu(this, on);
                             log("graphics: " + (on ? "Host GPU (GLES 1.x + 2.0, experimental)" : "Software (GLES 1.x only)") + "; applies on next Start Android");
                         } catch (IOException e) { log("cannot save graphics mode: " + e); }
+                    } else if (which == 5) {
+                        String[] labels = new String[AndroidGuest.CPU_CHOICES.length];
+                        int cur = -1;
+                        for (int k = 0; k < labels.length; k++) { labels[k] = AndroidGuest.CPU_CHOICES[k] + " CPU"; if (AndroidGuest.CPU_CHOICES[k] == AndroidGuest.cpus(this)) cur = k; }
+                        new android.app.AlertDialog.Builder(this).setTitle("Guest CPUs (applies on next Start Android)")
+                                .setSingleChoiceItems(labels, cur, (d3, w3) -> {
+                                    try { AndroidGuest.setCpus(this, AndroidGuest.CPU_CHOICES[w3]); log("guest CPUs: " + AndroidGuest.CPU_CHOICES[w3] + " (restart the guest to apply)"); }
+                                    catch (IOException e) { log("cannot save CPU count: " + e); }
+                                    d3.dismiss();
+                                }).show();
                     } else if (which == 3) {
                         new android.app.AlertDialog.Builder(this).setTitle("Guest resolution (applies on next Start Android)")
                                 .setSingleChoiceItems(AndroidGuest.DISPLAY_LABELS, AndroidGuest.displayMode(this), (d3, w3) -> {
@@ -285,7 +296,7 @@ public class MainActivity extends Activity implements EngineService.LogListener,
                 log("guest games: " + AndroidGuest.prepareBoot(this));
                 GuestProfile prof = AndroidGuest.profile(this);
                 log("graphics: " + (prof.glSocket != null ? "Host GPU (GLES 1.x + 2.0)" : "Software (GLES 1.x only)")
-                        + ", " + prof.displayWidth + "x" + prof.displayHeight);
+                        + ", " + prof.displayWidth + "x" + prof.displayHeight + ", " + prof.smp + " guest CPUs");
                 if (prof.glSocket != null) {
                     String err = GlRenderer.start(new File(prof.glSocket), prof.displayWidth, prof.displayHeight);
                     if (err != null) { log("host GPU renderer: " + err + " -> switch Graphics to Software in \"Android 7 guest…\""); return; }
@@ -296,7 +307,9 @@ public class MainActivity extends Activity implements EngineService.LogListener,
                     ui.post(() -> showGlSurface(false));
                 }
                 service.start(prof);
+                vnc.setMultiTouchSocket(QemuLauncher.qmpSocket(this));
                 followSerial();
+                perfMonitor();
                 audio.start(QemuLauncher.audioSocket(this));
                 ui.post(() -> vnc.connect(QemuLauncher.vncSocket(this)));
             } catch (IOException e) { log("start failed: " + e); }
@@ -337,6 +350,69 @@ public class MainActivity extends Activity implements EngineService.LogListener,
         t.start();
     }
 
+    /**
+     * Every 10 s while the guest runs: screen fps (host GPU mode) and the busiest threads of the
+     * engine process and of this app (renderer), as a share of one core. For performance reports.
+     */
+    private void perfMonitor() {
+        Thread t = new Thread(() -> {
+            java.util.Map<String, long[]> prev = new java.util.HashMap<>();
+            long prevFrames = GlRenderer.frameCount(), prevMs = System.currentTimeMillis();
+            long hz = 100;
+            try { hz = android.system.Os.sysconf(android.system.OsConstants._SC_CLK_TCK); } catch (Throwable ignored) {}
+            while (service != null && service.isRunning()) {
+                try { Thread.sleep(10000); } catch (InterruptedException e) { return; }
+                long now = System.currentTimeMillis(), frames = GlRenderer.frameCount();
+                double secs = (now - prevMs) / 1000.0;
+                java.util.Map<String, long[]> cur = new java.util.HashMap<>();
+                int qemuPid = findQemuPid();
+                if (qemuPid > 0) readThreads("/proc/" + qemuPid + "/task", "qemu", cur);
+                readThreads("/proc/self/task", "app", cur);
+                StringBuilder sb = new StringBuilder("perf:");
+                if (GlRenderer.isRunning()) sb.append(String.format(Locale.US, " fps=%.1f", (frames - prevFrames) / secs));
+                java.util.List<String> busy = new java.util.ArrayList<>();
+                for (java.util.Map.Entry<String, long[]> en : cur.entrySet()) {
+                    long[] p = prev.get(en.getKey());
+                    if (p == null) continue;
+                    int pct = (int) Math.round((en.getValue()[0] - p[0]) * 100.0 / hz / secs);
+                    if (pct >= 5) busy.add(String.format(Locale.US, "%03d%% %s", pct, en.getKey().substring(en.getKey().indexOf(' ') + 1)));
+                }
+                java.util.Collections.sort(busy, java.util.Collections.reverseOrder());
+                for (int i = 0; i < busy.size() && i < 10; i++) sb.append(" | ").append(busy.get(i).replaceFirst("^0+(?=\\d)", ""));
+                if (!prev.isEmpty()) log(sb.toString());
+                prev = cur; prevFrames = frames; prevMs = now;
+            }
+        }, "perf-monitor");
+        t.setDaemon(true);
+        t.start();
+    }
+
+    private static int findQemuPid() {
+        File[] ps = new File("/proc").listFiles();
+        if (ps != null) for (File p : ps) {
+            if (!p.getName().matches("\\d+")) continue;
+            try {
+                String cmd = new String(java.nio.file.Files.readAllBytes(new File(p, "cmdline").toPath()), StandardCharsets.ISO_8859_1);
+                if (cmd.contains(QemuLauncher.QEMU_BINARY)) return Integer.parseInt(p.getName());
+            } catch (IOException | RuntimeException ignored) {}
+        }
+        return -1;
+    }
+
+    /** Adds "tid owner:threadname" -> {cpu ticks} for every thread under a /proc/<pid>/task directory. */
+    private static void readThreads(String taskDir, String owner, java.util.Map<String, long[]> out) {
+        File[] ts = new File(taskDir).listFiles();
+        if (ts == null) return;
+        for (File t : ts) {
+            try {
+                String st = new String(java.nio.file.Files.readAllBytes(new File(t, "stat").toPath()), StandardCharsets.ISO_8859_1);
+                int a = st.indexOf('('), b = st.lastIndexOf(')');
+                String[] f = st.substring(b + 2).split(" ");
+                out.put(t.getName() + " " + owner + ":" + st.substring(a + 1, b), new long[]{Long.parseLong(f[11]) + Long.parseLong(f[12])});
+            } catch (IOException | RuntimeException ignored) {}
+        }
+    }
+
     private void copyAsset(String asset, File dst) throws IOException {
         try (java.io.InputStream in = getAssets().open(asset); OutputStream out = new FileOutputStream(dst)) {
             byte[] buf = new byte[1 << 16]; int n; while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
@@ -349,6 +425,7 @@ public class MainActivity extends Activity implements EngineService.LogListener,
         io.execute(() -> {
             try {
                 startForegroundService(new Intent(this, EngineService.class));
+                vnc.setMultiTouchSocket(null);
                 service.start(profile);
                 ui.post(() -> vnc.connect(QemuLauncher.vncSocket(this)));
             } catch (IOException e) { log("start failed: " + e); }

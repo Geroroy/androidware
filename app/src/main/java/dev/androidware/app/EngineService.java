@@ -108,6 +108,7 @@ public class EngineService extends Service {
     public synchronized void stop() {
         Process p = proc;
         if (p == null) return;
+        TouchInjector.close();   // the QMP socket serves one client at a time
         try {
             QmpClient qmp = new QmpClient(QemuLauncher.qmpSocket(getApplicationContext()));
             qmp.connect(1500);

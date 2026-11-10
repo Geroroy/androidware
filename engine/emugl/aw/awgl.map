@@ -6,6 +6,7 @@
         awgl_set_post_callback;
         awgl_set_window;
         awgl_get_gl_strings;
+        awgl_get_post_count;
         Java_dev_androidware_app_GlRenderer_*;
     local:
         *;

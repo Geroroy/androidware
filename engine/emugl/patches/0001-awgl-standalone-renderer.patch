@@ -70,6 +70,18 @@ Apply with: patch -d src -p1 < this-file
      }
      free((void*)gles1Extensions);
      gles1Extensions = NULL;
+@@ -1059,8 +1077,11 @@
+     return true;
+ }
+ 
++extern "C" void awgl_note_post(void);  // awgl: frame counter for the app's fps readout
++
+ bool FrameBuffer::post(HandleType p_colorbuffer, bool needLock)
+ {
++    awgl_note_post();
+     if (needLock) {
+         m_lock.lock();
+     }
 --- a/host/libs/libOpenglRender/RenderControl.cpp
 +++ b/host/libs/libOpenglRender/RenderControl.cpp
 @@ -15,6 +15,8 @@

@@ -265,6 +265,24 @@ public final class AndroidGuest {
     public static void setHostGpu(Context ctx, boolean on) throws IOException {
         if (on) { try (OutputStream o = new FileOutputStream(gfxFile(ctx))) { o.write('1'); } } else gfxFile(ctx).delete();
     }
+    /**
+     * Guest CPU count. Each guest CPU is one host thread (multi-threaded TCG). PC (4 host cores):
+     * smp 2 booted in 75-85 s, smp 4 in 142-150 s (host oversubscribed). Default: 4 on hosts with
+     * 8 or more cores, else 2.
+     */
+    public static final int[] CPU_CHOICES = {1, 2, 3, 4, 6};
+    private static File cpusFile(Context ctx) { return new File(dir(ctx), "cpus.txt"); }
+    public static int cpus(Context ctx) {
+        try {
+            int n = Integer.parseInt(new String(java.nio.file.Files.readAllBytes(cpusFile(ctx).toPath()), java.nio.charset.StandardCharsets.UTF_8).trim());
+            if (n >= 1 && n <= 8) return n;
+        } catch (IOException | NumberFormatException ignored) {}
+        return Runtime.getRuntime().availableProcessors() >= 8 ? 4 : 2;
+    }
+    public static void setCpus(Context ctx, int n) throws IOException {
+        try (OutputStream o = new FileOutputStream(cpusFile(ctx))) { o.write(String.valueOf(n).getBytes(java.nio.charset.StandardCharsets.UTF_8)); }
+    }
+
     public static int[] displaySize(Context ctx) { return DISPLAY_MODES[displayMode(ctx)]; }
 
     /** Profile that boots the image: ARMv7 CPU, goldfish devices, virtio-mmio disks. */
@@ -275,7 +293,7 @@ public final class AndroidGuest {
         g.kind = GuestProfile.KIND_ANDROID_RANCHU;
         g.machine = "virt,highmem=off,goldfish=on";
         g.cpu = "cortex-a15";
-        g.smp = 2;   // PC (4 host cores): smp 2 booted in 75-85 s, smp 4 in 142-150 s; re-measure on device
+        g.smp = cpus(ctx);
         g.memMb = 1024;
         g.kernel = new File(d, "kernel-ranchu").getAbsolutePath();
         g.initrd = new File(d, new File(d, "ramdisk-aw.img").isFile() ? "ramdisk-aw.img" : "ramdisk.img").getAbsolutePath();
