@@ -43,6 +43,13 @@ public class VncView extends View {
     private DataOutputStream out;
     private StatusListener status;
     private int lastButtons = 0;
+    private volatile boolean overlay;   // host-GPU mode: draw nothing, only map touches
+
+    /** In overlay mode the guest screen is drawn by the GLES renderer on a SurfaceView below this view. */
+    public void setOverlay(boolean on) { overlay = on; setBackgroundColor(on ? Color.TRANSPARENT : Color.BLACK); postInvalidate(); }
+    /** Guest framebuffer size as reported by VNC (0 if not connected yet). */
+    public int guestWidth() { return fbW; }
+    public int guestHeight() { return fbH; }
 
     public VncView(Context c) { super(c); init(); }
     public VncView(Context c, AttributeSet a) { super(c, a); init(); }
@@ -185,7 +192,7 @@ public class VncView extends View {
         float s = Math.min(sx, sy);
         float dw = b.getWidth() * s, dh = b.getHeight() * s;
         dst.set((getWidth() - dw) / 2, (getHeight() - dh) / 2, (getWidth() + dw) / 2, (getHeight() + dh) / 2);
-        canvas.drawBitmap(b, null, dst, paint);
+        if (!overlay) canvas.drawBitmap(b, null, dst, paint);
     }
 
     /** Maps a view coordinate into guest framebuffer pixels; null if outside the image. */

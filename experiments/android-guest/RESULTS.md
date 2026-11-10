@@ -57,3 +57,12 @@
 - 수정 후: "부팅 완료 10초 뒤 첫 screendump" 절차 8회 연속 정상 + 전체 시나리오 1회 정상(자동 설치 Success, fps 38~42, 오디오 5,398,528 B). 수정 전에는 같은 절차 약 9회 중 2회 SIGSEGV.
 
 재현: `scripts/fetch-android-guest.sh` → `javac -d out app/src/main/java/dev/androidware/app/GuestMedia.java experiments/android-guest/GuestMediaCli.java` → `java -cp out GuestMediaCli ramdisk dist/android-guest/ramdisk.img dist/android-guest/ramdisk-aw.img`, `... transfer dist/android-guest/transfer.img <apk> <package> 1`, `... sparse app/src/main/assets/androidguest/sdcard.img.gz dist/android-guest/sdcard.img` → `QEMU=... FULL=1 experiments/android-guest/boot.py dist/android-guest <tag>`.
+
+## 세션 4 추가 (2026-11-10): 호스트 GLES 경로 (GLES 2.0)
+
+구성: `engine/emugl/build-linux/aw-gl-renderer --socket S --width 480 --height 800 --dump-dir D`를 먼저 띄우고, `RAMDISK=ramdisk-gl.img GLSOCK=S FULL=1 boot.py ...`(커널 인자 `qemu.gles=1`, `-global goldfish-pipe.socket=S`). 호스트 GL은 Mesa llvmpipe(EGL surfaceless, 소프트웨어).
+
+- 첫 시도: 게스트 `EGL_emulation: Failed to establish connection with the host`. pipe 장치 추적 결과 커널이 넘기는 주소가 `0xbef65a68` 같은 **사용자 가상 주소**였다(최신 goldfish 드라이버는 물리 주소). `cpu_memory_rw_debug(current_cpu, …)`로 변환하도록 수정.
+- 수정 후: `sys.boot_completed=1` 96~97초, 렌더러 프레임 출력(홈 화면, Settings). `gles2test`(armeabi-v7a, 셰이더+텍스처 사각형): `GL_VERSION=OpenGL ES 2.0 (OpenGL ES 3.2 Mesa …)`, `program link=1`, fps 37~49. `ro.opengles.version=131072`, 밀도 240.
+- 게스트 로그에 `eglCreateSyncKHR … EGL_BAD_ATTRIBUTE` 1회(SurfaceFlinger, 동작에는 영향 없어 보임).
+- 미검증: GPU 모드의 GLES 1.x(이 Mesa는 GLES1 컨텍스트 생성 실패), 실제 GPU 드라이버, Android에서 Surface 직접 출력.

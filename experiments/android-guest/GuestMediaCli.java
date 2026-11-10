@@ -9,7 +9,7 @@ import java.util.List;
 public class GuestMediaCli {
     public static void main(String[] a) throws Exception {
         switch (a[0]) {
-            case "ramdisk": GuestMedia.buildRamdisk(new File(a[1]), new File(a[2]), a.length > 3 && a[3].equals("gles")); break;
+            case "ramdisk": GuestMedia.buildRamdisk(new File(a[1]), new File(a[2]), a.length > 3 && a[3].equals("gles"), 240); break;
             case "transfer": {
                 List<GuestMedia.Apk> l = new ArrayList<>();
                 for (int i = 2; i + 2 < a.length; i += 3) l.add(new GuestMedia.Apk(new File(a[i]), a[i + 1], a[i + 2].equals("1")));

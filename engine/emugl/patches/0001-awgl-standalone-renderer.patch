@@ -1,0 +1,147 @@
+awgl: minimal changes to emugl (emu-2.0-release, distrib/android-emugl) so it
+can run as a standalone render server on top of the system EGL/GLES.
+See engine/emugl/README.md for the rationale of each hunk.
+Apply with: patch -d src -p1 < this-file
+
+--- a/host/include/OpenglRender/render_api_platform_types.h
++++ b/host/include/OpenglRender/render_api_platform_types.h
+@@ -26,9 +26,10 @@
+ 
+ #elif defined(__linux__)
+ 
+-// Really a Window handle, but we don't want to include the X11 headers here.
++// awgl: upstream uses a 32-bit X11 Window id here. We have no X11; on Android
++// the handle is an ANativeWindow*, so it must be pointer-sized.
+ #include <stdint.h>
+-typedef uint32_t FBNativeWindowType;
++typedef uintptr_t FBNativeWindowType;
+ 
+ #elif defined(__APPLE__)
+ 
+--- a/host/libs/libOpenglRender/FrameBuffer.cpp
++++ b/host/libs/libOpenglRender/FrameBuffer.cpp
+@@ -163,6 +163,15 @@
+     s_egl.eglDestroyContext(m_eglDisplay, m_eglContext);
+     s_egl.eglDestroyContext(m_eglDisplay, m_pbufContext);
+     s_egl.eglDestroySurface(m_eglDisplay, m_pbufSurface);
++    // awgl: upstream never resets the singleton, so initialize() after
++    // finalize() silently returned a FrameBuffer whose contexts are gone.
++    // Drop it so the renderer can be stopped and started again in one
++    // process. (finalize() is only called from RenderWindow's CMD_FINALIZE,
++    // which does not touch the object afterwards.)
++    if (s_theFrameBuffer == this) {
++        s_theFrameBuffer = NULL;
++        delete this;
++    }
+ }
+ 
+ bool FrameBuffer::initialize(int width, int height, bool useSubWindow)
+@@ -211,11 +220,15 @@
+     //
+     char* gles1Extensions = NULL;
+     gles1Extensions = getGLES1ExtensionString(fb->m_eglDisplay);
++    // awgl: upstream fails here. Some hosts cannot create GLES 1.x contexts
++    // at all (e.g. distro Mesa built with -Dgles1=disabled). Keep going with
++    // GLES 2.x only: guest GLES 1.x contexts will then fail to be created
++    // (rcCreateContext returns 0), everything else works.
++    bool gles1Missing = false;
+     if (!gles1Extensions) {
+-        // Could not create GLES2 context - drop GL2 capability
+-        ERR("Failed to obtain GLES 1.x extensions string!\n");
+-        delete fb;
+-        return false;
++        ERR("WARNING: host EGL cannot create GLES 1.x contexts; "
++            "guest GLES 1.x clients will NOT work!\n");
++        gles1Missing = true;
+     }
+ 
+     //
+@@ -322,7 +335,12 @@
+     has_gl_oes_image = true;
+ 
+     if (has_gl_oes_image) {
+-        has_gl_oes_image &= strstr(gles1Extensions, "GL_OES_EGL_image") != NULL;
++        // awgl: without GLES 1.x, check the GLES 2.x extension string of the
++        // (current) framebuffer context instead.
++        const char* exts = gles1Missing ?
++                (const char*)s_gles2.glGetString(GL_EXTENSIONS) :
++                gles1Extensions;
++        has_gl_oes_image &= exts && strstr(exts, "GL_OES_EGL_image") != NULL;
+     }
+     free((void*)gles1Extensions);
+     gles1Extensions = NULL;
+--- a/host/libs/libOpenglRender/RenderControl.cpp
++++ b/host/libs/libOpenglRender/RenderControl.cpp
+@@ -25,6 +25,10 @@
+ 
+ static const GLint rendererVersion = 1;
+ 
++// awgl: see aw/glstrings.cpp.
++extern const char* awgl_filter_gl_string(unsigned int name, bool isGL2,
++                                         const char* hostStr);
++
+ static GLint rcGetRendererVersion()
+ {
+     return rendererVersion;
+@@ -75,6 +79,10 @@
+         else {
+             str = (const char *)s_gles1.glGetString(name);
+         }
++        // awgl: we sit on a real driver, not on the Translator. Clamp the
++        // version / extension strings to what this wire protocol supports
++        // (implemented in engine/emugl/aw/glstrings.cpp).
++        str = awgl_filter_gl_string(name, tInfo->currContext->isGL2(), str);
+         if (str) {
+             len = strlen(str) + 1;
+         }
+--- a/host/libs/libOpenglRender/RenderServer.cpp
++++ b/host/libs/libOpenglRender/RenderServer.cpp
+@@ -67,6 +67,14 @@
+     }
+ 
+     char addrstr[SocketStream::MAX_ADDRSTR_LEN];
++    // awgl: |addr| is now in/out. If the caller passes a non-empty string it
++    // is handed to listen() as the requested address (UnixStream binds to
++    // exactly that path); upstream ignored the incoming content.
++    addrstr[0] = '\0';
++    if (addr && addrLen > 0 && memchr(addr, 0, addrLen) != NULL &&
++        strlen(addr) < sizeof(addrstr)) {
++        strcpy(addrstr, addr);
++    }
+     if (server->m_listenSock->listen(addrstr) < 0) {
+         ERR("RenderServer::create failed to listen\n");
+         delete server;
+--- a/host/libs/libOpenglRender/UnixStream.cpp
++++ b/host/libs/libOpenglRender/UnixStream.cpp
+@@ -121,7 +121,16 @@
+ 
+ int UnixStream::listen(char addrstr[MAX_ADDRSTR_LEN])
+ {
+-    if (make_unix_path(addrstr, MAX_ADDRSTR_LEN, getpid()) < 0) {
++    // awgl: a non-empty |addrstr| is the exact socket path to bind to (see
++    // RenderServer::create). Only fall back to upstream's generated
++    // /tmp/android-$USER/qemu-gles-<pid> path when none was requested.
++    if (addrstr[0] != '\0') {
++        // Remove a stale socket file to avoid EADDRINUSE in bind().
++        if (::access(addrstr, F_OK) == 0 && ::remove(addrstr) < 0) {
++            ERR("Failed to remove stale socket file at %s: %s\n", addrstr,
++                strerror(errno));
++        }
++    } else if (make_unix_path(addrstr, MAX_ADDRSTR_LEN, getpid()) < 0) {
+         return -1;
+     }
+ 
+--- a/shared/emugl/common/lazy_instance.cpp
++++ b/shared/emugl/common/lazy_instance.cpp
+@@ -38,7 +38,10 @@
+ #  define acquireBarrier() compilerBarrier()
+ #  define releaseBarrier() compilerBarrier()
+ #else
+-#  error "Your CPU is not supported"
++// awgl: upstream only supports x86 hosts here. Other CPUs (arm64 Android)
++// have weaker memory ordering, so use a full memory barrier.
++#  define acquireBarrier() __sync_synchronize()
++#  define releaseBarrier() __sync_synchronize()
+ #endif
+ 
+ static inline AtomicType loadAcquire(AtomicType volatile* ptr) {

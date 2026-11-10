@@ -32,6 +32,7 @@ public final class GuestProfile {
     public int displayHeight = 720;
     public int displayDpi = 240;
     public String androidSystem, androidCache, androidData;   // KIND_ANDROID_RANCHU only
+    public String glSocket;                                   // host GLES renderer socket (qemu.gles=1), or null
     public String androidSdcard, androidTransfer;             // optional: guest SD card (vdd), APK transfer disk (vde)
 
     public static File dir(File filesDir) { File d = new File(filesDir, "profiles"); d.mkdirs(); return d; }

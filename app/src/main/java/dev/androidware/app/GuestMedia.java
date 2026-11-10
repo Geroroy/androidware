@@ -78,7 +78,7 @@ public final class GuestMedia {
      *        advertises OpenGL ES 2.0 to apps via ro.opengles.version (the emulator normally sets
      *        this through its qemud boot-properties service, which this engine does not have).
      */
-    public static void buildRamdisk(File original, File out, boolean hostGles) throws IOException {
+    public static void buildRamdisk(File original, File out, boolean hostGles, int dpi) throws IOException {
         byte[] orig = Files.readAllBytes(original.toPath());
         byte[] rc = cpioFind(gunzip(orig), "init.ranchu.rc");
         if (rc == null) throw new IOException("init.ranchu.rc not found in " + original);
@@ -87,7 +87,7 @@ public final class GuestMedia {
         if (hostGles) {
             byte[] dp = cpioFind(gunzip(orig), "default.prop");
             if (dp == null) throw new IOException("default.prop not found in " + original);
-            cpioAdd(cpio, "default.prop", 0100644, (new String(dp, StandardCharsets.UTF_8) + "\nro.opengles.version=131072\n").getBytes(StandardCharsets.UTF_8));
+            cpioAdd(cpio, "default.prop", 0100644, (new String(dp, StandardCharsets.UTF_8) + "\nro.opengles.version=131072\nro.sf.lcd_density=" + dpi + "\n").getBytes(StandardCharsets.UTF_8));
         }
         cpioAdd(cpio, "aw-install.sh", 0100750, INSTALL_SCRIPT.getBytes(StandardCharsets.UTF_8));
         cpioAdd(cpio, "TRAILER!!!", 0, new byte[0]);

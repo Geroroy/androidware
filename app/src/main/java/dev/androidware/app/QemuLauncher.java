@@ -24,6 +24,7 @@ public final class QemuLauncher {
     public static File runtimeDir(Context ctx) { File d = new File(ctx.getFilesDir(), "run"); d.mkdirs(); return d; }
     public static File vncSocket(Context ctx) { return new File(runtimeDir(ctx), "vnc.sock"); }
     public static File qmpSocket(Context ctx) { return new File(runtimeDir(ctx), "qmp.sock"); }
+    public static File glSocket(Context ctx) { return new File(runtimeDir(ctx), "gl.sock"); }
     public static File audioSocket(Context ctx) { return new File(runtimeDir(ctx), "audio.sock"); }
     public static File serialLog(Context ctx) { return new File(runtimeDir(ctx), "serial.log"); }
     /** Data dir with QEMU's share/ files (keymaps etc.), extracted from assets on first run. */
@@ -61,6 +62,7 @@ public final class QemuLauncher {
             }
             a.add("-chardev"); a.add("socket,id=aud,path=" + audioSocket(ctx).getAbsolutePath() + ",server=on,wait=off");
             a.add("-global"); a.add("goldfish-audio.chardev=aud");
+            if (p.glSocket != null) { a.add("-global"); a.add("goldfish-pipe.socket=" + p.glSocket); }
             a.add("-drive"); a.add("if=none,id=data,file=" + p.androidData + ",format=raw,cache=writeback");
             a.add("-device"); a.add("virtio-blk-device,drive=data");
             a.add("-drive"); a.add("if=none,id=cache,file=" + p.androidCache + ",format=raw,cache=writeback");

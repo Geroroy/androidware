@@ -38,6 +38,7 @@ public class MainActivity extends Activity implements EngineService.LogListener,
     private TextView logView;
     private ScrollView logScroll;
     private VncView vnc;
+    private android.view.SurfaceView glSurface;
     private static final AudioPlayer audio = new AudioPlayer();   // static: keeps playing across activity recreation
     // static: the on-screen log survives activity recreation (rotation)
     private static final ArrayDeque<String> lines = new ArrayDeque<>();
@@ -64,6 +65,14 @@ public class MainActivity extends Activity implements EngineService.LogListener,
         logScroll = findViewById(R.id.log_scroll);
         vnc = findViewById(R.id.vnc);
         vnc.setStatusListener(this);
+        glSurface = findViewById(R.id.gl_surface);
+        glSurface.getHolder().addCallback(new android.view.SurfaceHolder.Callback() {
+            @Override public void surfaceCreated(android.view.SurfaceHolder h) {}
+            @Override public void surfaceChanged(android.view.SurfaceHolder h, int format, int w, int hgt) { GlRenderer.setSurface(h.getSurface(), w, hgt); }
+            @Override public void surfaceDestroyed(android.view.SurfaceHolder h) { GlRenderer.setSurface(null, 0, 0); }
+        });
+        findViewById(R.id.display).addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob) -> fitGlSurface());
+        if (GlRenderer.isRunning()) showGlSurface(true);
         appLog = new File(QemuLauncher.runtimeDir(this), "app.log");
         profile = GuestProfile.load(getFilesDir(), "default");
 
@@ -89,7 +98,7 @@ public class MainActivity extends Activity implements EngineService.LogListener,
             startActivityForResult(i, REQ_EXPORT);
         });
 
-        log("androidware 0.0.8-m1; profile=" + profile.name + " kernel=" + profile.kernel + " initrd=" + profile.initrd + " disk=" + profile.disk);
+        log("androidware 0.0.9-m1; profile=" + profile.name + " kernel=" + profile.kernel + " initrd=" + profile.initrd + " disk=" + profile.disk);
         Intent svc = new Intent(this, EngineService.class);
         bindService(svc, conn, Context.BIND_AUTO_CREATE);
     }
@@ -161,6 +170,23 @@ public class MainActivity extends Activity implements EngineService.LogListener,
     }
 
     private volatile long bootStartMs;
+    private int glW = 480, glH = 800;
+
+    /** Host-GPU mode: show the SurfaceView (aspect-fit, centred) under a transparent VncView. */
+    private void showGlSurface(boolean on) {
+        vnc.setOverlay(on);
+        glSurface.setVisibility(on ? android.view.View.VISIBLE : android.view.View.GONE);
+        if (on) fitGlSurface();
+    }
+
+    private void fitGlSurface() {
+        android.view.View box = findViewById(R.id.display);
+        if (glSurface.getVisibility() != android.view.View.VISIBLE || box.getWidth() == 0) return;
+        float s = Math.min((float) box.getWidth() / glW, (float) box.getHeight() / glH);
+        int w = Math.round(glW * s), h = Math.round(glH * s);
+        android.widget.FrameLayout.LayoutParams lp = (android.widget.FrameLayout.LayoutParams) glSurface.getLayoutParams();
+        if (lp.width != w || lp.height != h) { lp.width = w; lp.height = h; lp.gravity = android.view.Gravity.CENTER; glSurface.setLayoutParams(lp); }
+    }
     private boolean fullscreen;
 
     /** Fullscreen: only the guest display, system bars hidden. Swipe in from a screen edge to leave. */
@@ -190,7 +216,8 @@ public class MainActivity extends Activity implements EngineService.LogListener,
                 "Download from dl.google.com (" + (AndroidGuest.ZIP_SIZE >> 20) + " MiB)",
                 "Import armeabi-v7a-24_r07.zip",
                 "Factory reset guest data",
-                "Resolution… (now " + AndroidGuest.DISPLAY_LABELS[AndroidGuest.displayMode(this)] + ")"};
+                "Resolution… (now " + AndroidGuest.DISPLAY_LABELS[AndroidGuest.displayMode(this)] + ")",
+                "Graphics: " + (AndroidGuest.hostGpu(this) ? "Host GPU, GLES 2.0 (tap for Software)" : "Software, GLES 1.x (tap for Host GPU)")};
         new android.app.AlertDialog.Builder(this)
                 .setTitle("Android 7.0 guest (" + (AndroidGuest.isInstalled(this) ? "installed" : "not installed") + ")")
                 .setItems(items, (d, which) -> {
@@ -211,6 +238,12 @@ public class MainActivity extends Activity implements EngineService.LogListener,
                     } else if (which == 1) {
                         Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("application/zip");
                         startActivityForResult(i, REQ_ANDROID_ZIP);
+                    } else if (which == 4) {
+                        try {
+                            boolean on = !AndroidGuest.hostGpu(this);
+                            AndroidGuest.setHostGpu(this, on);
+                            log("graphics: " + (on ? "Host GPU (GLES 1.x + 2.0, experimental)" : "Software (GLES 1.x only)") + "; applies on next Start Android");
+                        } catch (IOException e) { log("cannot save graphics mode: " + e); }
                     } else if (which == 3) {
                         new android.app.AlertDialog.Builder(this).setTitle("Guest resolution (applies on next Start Android)")
                                 .setSingleChoiceItems(AndroidGuest.DISPLAY_LABELS, AndroidGuest.displayMode(this), (d3, w3) -> {
@@ -238,7 +271,17 @@ public class MainActivity extends Activity implements EngineService.LogListener,
                 bootStartMs = System.currentTimeMillis();
                 startForegroundService(new Intent(this, EngineService.class));
                 log("guest games: " + AndroidGuest.prepareBoot(this));
-                service.start(AndroidGuest.profile(this));
+                GuestProfile prof = AndroidGuest.profile(this);
+                if (prof.glSocket != null) {
+                    String err = GlRenderer.start(new File(prof.glSocket), prof.displayWidth, prof.displayHeight);
+                    if (err != null) { log("host GPU renderer: " + err + " -> switch Graphics to Software in \"Android 7 guest…\""); return; }
+                    log("host GPU renderer: " + GlRenderer.glStrings());
+                    glW = prof.displayWidth; glH = prof.displayHeight;
+                    ui.post(() -> showGlSurface(true));
+                } else {
+                    ui.post(() -> showGlSurface(false));
+                }
+                service.start(prof);
                 audio.start(QemuLauncher.audioSocket(this));
                 ui.post(() -> vnc.connect(QemuLauncher.vncSocket(this)));
             } catch (IOException e) { log("start failed: " + e); }
@@ -298,8 +341,9 @@ public class MainActivity extends Activity implements EngineService.LogListener,
 
     @Override public void onLine(String line) { log(line); }
     @Override public void onExit(int code) {
-        ui.post(() -> vnc.disconnect());
+        ui.post(() -> { vnc.disconnect(); showGlSurface(false); });
         audio.stop();
+        GlRenderer.stop();
         if (bootStartMs != 0) { log("guest ran for " + (System.currentTimeMillis() - bootStartMs) + " ms wall"); bootStartMs = 0; }
         // Show what the guest printed on its serial console (last 40 lines).
         try {

@@ -1,6 +1,26 @@
 # 진행 상태와 다음 단계
 
-최종 갱신: 2026-11-10 (세션 3). 세션 2, 세션 1 기록은 아래에 그대로 둔다.
+최종 갱신: 2026-11-10 (세션 4). 세션 2, 세션 1 기록은 아래에 그대로 둔다.
+
+## 세션 4 요약 (2026-11-10) — 호스트 GPU GLES 2.0 경로 (앱 0.0.9-m1, 실험적)
+
+N.O.V.A. 3에 필요한 GLES 2.0을 위해 게스트 GL 명령을 호스트 GPU에서 실행하는 경로를 만들었다. **PC(Mesa llvmpipe)에서만 검증했고, 기기 GPU와 실제 게임은 미검증이다.**
+
+| 구성 요소 | 내용 |
+|---|---|
+| 엔진 goldfish-pipe (패치 0024) | 게스트 `/dev/qemu_pipe`의 `opengles` 연결을 유닉스 소켓으로 전달. 이 3.10 커널은 버퍼를 **게스트 가상 주소**로 넘기므로 접근 중인 CPU로 변환(`cpu_memory_rw_debug`) |
+| 호스트 렌더러 `engine/emugl` | Android 에뮬레이터 2.0의 emugl(Apache-2.0)을 Translator 없이 시스템 EGL/GLES에 직접 연결한 렌더 서버. Linux용 `aw-gl-renderer`, Android용 `libawgl.so`(JNI 포함) |
+| 앱 | "Android 7 guest…" → **Graphics** 전환(Software ↔ Host GPU). GPU 모드에서는 앱 프로세스 안의 렌더러가 SurfaceView에 직접 그리고, VncView는 투명하게 터치만 처리 |
+| 게스트 설정 | 커널 인자 `qemu.gles=1`, 램디스크 오버레이로 `ro.opengles.version=131072`, `ro.sf.lcd_density` |
+
+PC 결과: GPU 모드 부팅 96~97초, SurfaceFlinger·런처·Settings가 호스트 GL로 렌더링, 32비트 **GLES 2.0 테스트 앱 설치·실행(셰이더 링크 성공, 40~48 fps, llvmpipe)**. 소프트웨어 모드는 영향 없음(재검증).
+
+알려진 한계·위험:
+- PC의 Mesa에 GLES 1.x 컨텍스트가 없어 **GPU 모드의 GLES 1.x는 미검증**(검은방은 Software 모드 권장).
+- 기기에서 미실행: `ANativeWindow` 출력, 드라이버(Adreno)와의 EGLImage 공유, 창 설정 선택.
+- `rcCreateClientImage`가 호스트 EGLImage 핸들을 32비트로 자른다(64비트 드라이버에서 게스트가 GL 텍스처로 EGLImage를 만드는 앱은 깨짐). gralloc 경로는 무관.
+- 렌더러가 앱 프로세스 안에서 돌므로 렌더러 크래시는 앱 종료로 이어진다.
+- N.O.V.A. 3 자체: APK/데이터 미확보, 추가 데이터 다운로드 서버 종료 가능성, CPU 측 TCG 성능(FP 약 7배 저하)은 별개 문제.
 
 ## 기기 실측 5차 (2026-11-10, 앱 0.0.7-m1, 사용자 스크린샷)
 

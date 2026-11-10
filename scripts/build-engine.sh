@@ -128,5 +128,7 @@ SELF="$ROOT/app/src/main/assets/selftest"; mkdir -p "$SELF"
 "$TC/bin/llvm-strip" "$OUTLIB/libbench-arm64.so"
 # The VNC server needs keymaps/en-us from the data dir (-L); it is plain data from the QEMU source tree.
 mkdir -p "$ROOT/app/src/main/assets/qemu-share/keymaps" && cp "$SRC/qemu/pc-bios/keymaps/en-us" "$ROOT/app/src/main/assets/qemu-share/keymaps/"
+# Host GLES renderer (GLES 2.0 path): engine/emugl -> libawgl.so
+"$ROOT/engine/emugl/build.sh" android && cp "$ROOT/engine/emugl/build-android/libawgl.stripped.so" "$OUTLIB/libawgl.so"
 ls -la "$OUTLIB"
 echo "engine build complete"

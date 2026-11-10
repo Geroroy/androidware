@@ -12,10 +12,10 @@ index 6f5b2ad..efea378 100644
      bool
 diff --git a/hw/arm/android-goldfish.c b/hw/arm/android-goldfish.c
 new file mode 100644
-index 0000000..25faa0a
+index 0000000..2581597
 --- /dev/null
 +++ b/hw/arm/android-goldfish.c
-@@ -0,0 +1,1234 @@
+@@ -0,0 +1,1252 @@
 +/*
 + * Minimal "goldfish" platform devices for running Android emulator (ranchu)
 + * guest kernels on the upstream 'virt' machine.
@@ -54,6 +54,9 @@ index 0000000..25faa0a
 +#include "qemu/bitops.h"
 +#include <poll.h>
 +#include <glib-unix.h>
++#include "hw/core/cpu.h"
++#include "exec/target_page.h"
++#include "exec/cpu-common.h"
 +#include "chardev/char-fe.h"
 +#include "hw/core/qdev-properties-system.h"
 +#include "ui/input.h"
@@ -1018,9 +1021,19 @@ index 0000000..25faa0a
 +    if (!len) {
 +        return 0;
 +    }
++    /*
++     * The 3.10 ranchu driver passes guest *virtual* addresses of the calling
++     * process (one page at a time), so translate through the CPU doing the
++     * access. On failure it touches the page and retries.
++     */
++    if (!current_cpu) {
++        return PIPE_ERROR_INVAL;
++    }
++    len = MIN(len, TARGET_PAGE_SIZE - (addr & (TARGET_PAGE_SIZE - 1)));
 +    if (is_write) {
-+        address_space_read(&address_space_memory, addr, MEMTXATTRS_UNSPECIFIED,
-+                           s->xfer, len);
++        if (cpu_memory_rw_debug(current_cpu, addr, s->xfer, len, false) < 0) {
++            return PIPE_ERROR_INVAL;
++        }
 +        if (p->fd < 0) {
 +            return goldfish_pipe_connect(p, s->xfer, len);
 +        }
@@ -1031,12 +1044,17 @@ index 0000000..25faa0a
 +        if (p->fd < 0) {
 +            return PIPE_ERROR_INVAL;
 +        }
++        /* make sure the page is writable before consuming stream data */
++        if (cpu_memory_rw_debug(current_cpu, addr, s->xfer, 1, false) < 0 ||
++            cpu_memory_rw_debug(current_cpu, addr, s->xfer, 1, true) < 0) {
++            return PIPE_ERROR_INVAL;
++        }
 +        do {
 +            n = recv(p->fd, s->xfer, len, MSG_DONTWAIT);
 +        } while (n < 0 && errno == EINTR);
-+        if (n > 0) {
-+            address_space_write(&address_space_memory, addr,
-+                                MEMTXATTRS_UNSPECIFIED, s->xfer, n);
++        if (n > 0 && cpu_memory_rw_debug(current_cpu, addr, s->xfer, n, true) < 0) {
++            goldfish_pipe_host_close(p);
++            return PIPE_ERROR_IO;
 +        }
 +    }
 +    if (n < 0) {

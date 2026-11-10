@@ -71,7 +71,7 @@ public final class AndroidGuest {
      */
     public static String prepareBoot(Context ctx) throws IOException {
         File d = dir(ctx);
-        GuestMedia.buildRamdisk(new File(d, "ramdisk.img"), new File(d, "ramdisk-aw.img"), false);
+        GuestMedia.buildRamdisk(new File(d, "ramdisk.img"), new File(d, "ramdisk-aw.img"), hostGpu(ctx), displaySize(ctx)[2]);
         File sd = new File(d, "sdcard.img");
         if (!sd.isFile()) {
             try (InputStream in = ctx.getAssets().open("androidguest/sdcard.img.gz")) { GuestMedia.extractSparseGz(in, sd); }
@@ -178,6 +178,14 @@ public final class AndroidGuest {
         try (OutputStream o = new FileOutputStream(displayFile(ctx))) { o.write(String.valueOf(i).getBytes(java.nio.charset.StandardCharsets.UTF_8)); }
     }
 
+    /** Graphics mode: false = guest software GLES 1.x (libagl), true = host GPU through the GLES renderer (GLES 1.x + 2.0). */
+    private static File gfxFile(Context ctx) { return new File(dir(ctx), "gfx.txt"); }
+    public static boolean hostGpu(Context ctx) { return gfxFile(ctx).isFile(); }
+    public static void setHostGpu(Context ctx, boolean on) throws IOException {
+        if (on) { try (OutputStream o = new FileOutputStream(gfxFile(ctx))) { o.write('1'); } } else gfxFile(ctx).delete();
+    }
+    public static int[] displaySize(Context ctx) { return DISPLAY_MODES[displayMode(ctx)]; }
+
     /** Profile that boots the image: ARMv7 CPU, goldfish devices, virtio-mmio disks. */
     public static GuestProfile profile(Context ctx) {
         File d = dir(ctx);
@@ -198,8 +206,10 @@ public final class AndroidGuest {
             g.androidTransfer = new File(d, "transfer.img").getAbsolutePath();
         }
         // qemu.gles=0: guest software GLES (libGLES_android) until the virgl path exists.
-        g.cmdline = "console=ttyAMA0 androidboot.console=ttyAMA0 androidboot.hardware=ranchu qemu=1 qemu.gles=0 "
-                + "androidboot.selinux=permissive";
+        boolean gpu = hostGpu(ctx);
+        g.glSocket = gpu ? QemuLauncher.glSocket(ctx).getAbsolutePath() : null;
+        g.cmdline = "console=ttyAMA0 androidboot.console=ttyAMA0 androidboot.hardware=ranchu qemu=1 qemu.gles=" + (gpu ? 1 : 0)
+                + " androidboot.selinux=permissive";
         int[] m = DISPLAY_MODES[displayMode(ctx)];
         g.displayWidth = m[0];
         g.displayHeight = m[1];

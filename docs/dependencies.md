@@ -21,6 +21,7 @@
 | Android NDK | r29 (29.0.14206865), clang 21 | NDK 라이선스 | 크로스 컴파일 | 세션 2부터 dl.google.com `android-ndk-r29-linux.zip` (SHA-1 87e2bb7e9be5d6a1c6cdf5ec40dd4e0c6d07c30b). 세션 1은 Docker Hub `cimg/android:2026.10.1-ndk`에서 추출 |
 | Android SDK | platform 35 `android.jar`, build-tools 35.0.0 (aapt2, d8 8.6.2, zipalign, apksigner) | SDK 라이선스 | APK 빌드 | dl.google.com `platform-35_r02.zip`(SHA-1 0bb560a9…), `build-tools_r35_linux.zip`(SHA-1 2cfaa0bb…) |
 | Android 7.0 ARM 에뮬레이터 시스템 이미지 (게스트) | `system-images;android-24;default;armeabi-v7a` r07, `armeabi-v7a-24_r07.zip` 283,677,512 B, SHA-1 3454546b4eed2d6c3dd06d47757d6da9f4176033 | Android SDK 라이선스 (커널 GPL-2.0, AOSP 구성 요소 Apache-2.0 등) | 게스트 Android(커널 `kernel-ranchu` 3.10, ramdisk, system, userdata) | dl.google.com. **재배포하지 않음**: 앱이 사용자 동의 후 내려받거나 사용자가 가져온다 |
+| emugl 호스트 렌더러 | `platform/external/qemu` 브랜치 `emu-2.0-release`의 `distrib/android-emugl` + `engine/emugl/patches`, `engine/emugl/aw` | Apache-2.0 | 게스트 GLES 명령을 호스트 GPU에서 실행(`libawgl.so`) | android.googlesource.com (`engine/emugl/fetch.sh`) |
 | goldfish 커널 드라이버 (참조만) | android.googlesource.com `kernel/goldfish` `android-goldfish-3.10`: `goldfishfb.c`, `goldfish_events.c`, `goldfish_battery.c` | GPL-2.0 | 패치 0024 레지스터 인터페이스 참조(코드 복사 없음) | android.googlesource.com |
 | Ubuntu arm64 커널 (실험/스모크 테스트 게스트) | `linux-image-6.8.0-71-generic` arm64 | GPL-2.0 | PC 실험 및 기기 스모크 테스트용 게스트 커널 (재배포하지 않고 스크립트로 내려받음) | ports.ubuntu.com |
 

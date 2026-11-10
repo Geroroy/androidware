@@ -1,0 +1,12 @@
+/* Linker version script for libawgl.so: export only the C API. */
+{
+    global:
+        awgl_start;
+        awgl_stop;
+        awgl_set_post_callback;
+        awgl_set_window;
+        awgl_get_gl_strings;
+        Java_dev_androidware_app_GlRenderer_*;
+    local:
+        *;
+};

@@ -18,3 +18,4 @@
 | D14 | 2026-11-10 | NDK r29 / build-tools 35 / platform 35를 **dl.google.com 공식 배포본**으로 전환(D10의 Docker Hub 추출 대체) | 이번 세션에서 접근 가능, SHA-1 검증 | — |
 | D15 | 2026-11-10 | 게임 APK는 **전달 디스크(게스트 vde, 단순 블록 형식) + 램디스크 오버레이의 설치 서비스**로 게스트에 넣는다. 램디스크는 원본 뒤에 cpio를 덧붙여(커널이 순서대로 풀어 덮어씀) 앱이 매 부팅 전에 만든다 | 게스트 네트워크·adb 없음; Android에서 ext4 이미지를 직접 고칠 도구 없음; Google 이미지 파일을 수정본으로 재배포하지 않음 | 게스트 네트워크+adb 경로가 생기면 대체 가능 |
 | D16 | 2026-11-10 | 오디오는 QEMU 오디오 서브시스템 대신 **goldfish-audio 장치 → chardev(유닉스 소켓) → 앱 AudioTrack** | 엔진을 오디오 백엔드 없이 빌드(`--audio-drv-list=`)한 상태 유지, AAudio 백엔드 작성 불필요, PC에서 파일로 검증 가능 | 지연이 크면 엔진 내 AAudio 백엔드 |
+| D17 | 2026-11-10 | GLES 2.0은 **goldfish pipe + emugl 호스트 렌더러(에뮬레이터 2.0 릴리스, 유닉스 소켓 RenderServer)**로 제공. 렌더러는 Translator 없이 호스트의 EGL/GLES를 직접 호출하고 앱 프로세스에서 SurfaceView에 그린다 | 게스트 이미지에 이미 emugl 인코더(libEGL_emulation 등)가 있음; 2.0 릴리스는 외부 의존이 없고 소켓 서버 내장; 화면 읽어오기(glReadPixels) 없이 직접 출력 | 드라이버 호환 문제가 크면 ANGLE 경유 또는 별도 프로세스 분리 |
