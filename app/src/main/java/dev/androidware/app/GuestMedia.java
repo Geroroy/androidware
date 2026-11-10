@@ -39,6 +39,8 @@ public final class GuestMedia {
             + "# androidware: install (once) and optionally start the APKs on the transfer disk\n"
             + "D=/dev/block/vde\n"
             + "say() { echo \"androidware: $*\" > /dev/kmsg; }\n"
+            + "# the guest has a hardware keyboard device (host keys), which hides the on-screen keyboard by default\n"
+            + "settings put secure show_ime_with_hard_keyboard 1\n"
             + "O=/dev/block/vdf\n"
             + "if [ -b $O ]; then\n"
             + "  # game data (OBB) image built by the app: apps see it as /sdcard/Android/obb/<package>/\n"

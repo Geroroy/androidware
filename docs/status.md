@@ -40,6 +40,13 @@
 - PC 검증: `fsck.fat` 통과(200 MB + 5 MB 임의 파일), 게스트에서 `androidware: game data mounted`, `/storage/emulated/0/Android/obb/<패키지>/` 경유 md5 일치, 소유 앱 uid(`u0_a60`)로 목록·읽기 성공, 다른 앱 uid는 거부(정상). 앱 쪽 zip 풀기(SAF 스트림)와 1.6 GB 크기는 기기에서만 확인 가능(미검증).
 - 미확인: 게임이 OBB 외 추가 다운로드를 요구하는지, zip 안 파일 이름이 표준 OBB 이름인지(아니면 가져오기가 이름을 알려 주며 실패).
 
+### 기기 실측 9차 (0.0.12-m1, 사용자 스크린샷) — N.O.V.A. 3 구동, 나이 입력 화면
+
+- OBB 가져오기 후 **게임이 구동되어 3D 배경 + "Please enter your age" / 약관 대화상자까지 렌더링**(Host GPU, Adreno 830). 데이터 없음 가설 확인. 성능·소리·이후 진행은 미보고.
+- 문제: 나이 입력란에 입력할 수 없음(게스트 화면 키보드가 뜨지 않음). 원인: 게스트에 하드웨어 키보드 장치(goldfish-events `qwerty2`)가 있어 Android가 화면 키보드를 숨긴다.
+- 수정(0.0.13-m1): 부팅 스크립트에서 `settings put secure show_ime_with_hard_keyboard 1`. PC 검증: 메시지 앱 입력란에서 LatinIME 표시(`mInputShown=true`, 스크린샷 확인). 게임의 입력란에서 동작하는지는 기기 확인 필요.
+- 관찰: 게임이 가로 화면이라 세로로 든 폰에서 90° 돌아간 채 표시된다(앱이 게스트 회전을 따라가지 않음). 미처리.
+
 (이전 계획) 사용자가 0.0.10-m1로 다시 실행 → `graphics:` 줄과 `[guest] awcrash:` 내용으로 원인 확정.
 
 ## 세션 4 요약 (2026-11-10) — 호스트 GPU GLES 2.0 경로 (앱 0.0.9-m1, 실험적)
