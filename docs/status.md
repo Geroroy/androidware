@@ -21,7 +21,7 @@
 - 빌드 환경: Ubuntu 24.04 x86_64 컨테이너, NDK r29(clang 21), meson 1.12.1, ninja 1.11.1, build-tools 35.0.0, JDK 21.
 - `qemu-system-aarch64` (aarch64-softmmu, TCG, VNC, QMP, internal fdt, slirp): **빌드 성공.** ELF 64-bit PIE, AArch64, interpreter `/system/bin/linker64`, NEEDED = libz/libm/libdl/libc, LOAD 정렬 0x4000(16KB). 스트립 후 35,272,216 B.
 - `qemu-arm` (arm-linux-user, libandroid-shmem 링크): **빌드 성공.** 스트립 후 4,230,192 B. 추가 패치 `0022-android-api26-ipc-decls.patch`(bionic API 26+ 선언 충돌 회피) 필요.
-- APK: `dist/androidware-debug-m0.apk` 39,887,888 B, 16KB zipalign 검증 통과, debug 서명.
+- APK: `dist/androidware-0.0.4-m0.apk` 39,887,888 B, 16KB zipalign 검증 통과, debug 서명.
 
 ## 남은 장애물 (중요도 순)
 
