@@ -81,7 +81,7 @@ public class MainActivity extends Activity implements EngineService.LogListener,
             startActivityForResult(i, REQ_EXPORT);
         });
 
-        log("androidware 0.0.4-m0; profile=" + profile.name + " kernel=" + profile.kernel + " initrd=" + profile.initrd + " disk=" + profile.disk);
+        log("androidware 0.0.5-m0; profile=" + profile.name + " kernel=" + profile.kernel + " initrd=" + profile.initrd + " disk=" + profile.disk);
         Intent svc = new Intent(this, EngineService.class);
         bindService(svc, conn, Context.BIND_AUTO_CREATE);
     }

@@ -21,7 +21,7 @@
 - 빌드 환경: Ubuntu 24.04 x86_64 컨테이너, NDK r29(clang 21), meson 1.12.1, ninja 1.11.1, build-tools 35.0.0, JDK 21.
 - `qemu-system-aarch64` (aarch64-softmmu, TCG, VNC, QMP, internal fdt, slirp): **빌드 성공.** ELF 64-bit PIE, AArch64, interpreter `/system/bin/linker64`, NEEDED = libz/libm/libdl/libc, LOAD 정렬 0x4000(16KB). 스트립 후 35,272,216 B.
 - `qemu-arm` (arm-linux-user, libandroid-shmem 링크): **빌드 성공.** 스트립 후 4,230,192 B. 추가 패치 `0022-android-api26-ipc-decls.patch`(bionic API 26+ 선언 충돌 회피) 필요.
-- APK: `dist/androidware-0.0.4-m0.apk` 39,887,888 B, 16KB zipalign 검증 통과, debug 서명.
+- APK: `dist/androidware-0.0.5-m0.apk` 39,887,888 B, 16KB zipalign 검증 통과, debug 서명.
 
 ## 남은 장애물 (중요도 순)
 
@@ -66,3 +66,13 @@
 - 패치 0023 적용 후 `qemu-arm`(TCG user mode)으로 32비트 bionic 벤치 **성공** (2회): `int_ms=177/173 fp_ms=713/712 mem_ms=18/18`, 체크섬 일치, exit 0.
 - 참고: 같은 바이너리를 PC(Xeon 2.1GHz, QEMU 8.2.2 qemu-arm)에서 돌린 값은 int 160 / fp 763 / mem 24. 기기 네이티브 기준값은 0.0.4-m0의 self-test에서 측정 예정(`libbench-arm64.so`).
 - 0.0.4-m0: "Boot test" 버튼(번들된 Ubuntu arm64 커널 + initramfs로 게스트 부팅, 64/32비트 벤치 실행 후 자동 종료, 시리얼 콘솔 출력 표시). PC QEMU 8.2.2에서 동일 명령행으로 사전 검증: 64비트 int 213/fp 1271/mem 107, 32비트 int 230/fp 1235/mem 139, exit 0.
+
+## 기기 실측 3차 (2026-11-10, SM-S938N, 앱 0.0.4-m0)
+
+| 실행 | int_ms | fp_ms | mem_ms |
+|---|---|---|---|
+| 네이티브 64비트 (`libbench-arm64.so`) | 93 | 108 | 5 |
+| `qemu-arm` TCG user mode, 32비트 bionic | 179 | 710 | 18 |
+| 비율 (TCG / 네이티브) | 1.9x | 6.6x | 3.6x |
+
+- Boot test 실패: `-vnc unix:...: could not find keymap file for language 'en-us'`, exit 1 (286 ms). 원인: VNC 서버가 시작 시 `-L` 디렉터리의 `keymaps/en-us`를 요구하는데 번들하지 않았음(PC 검증에서는 시스템 기본 데이터 디렉터리가 있어 드러나지 않았음). 조치: 0.0.5-m0에 `assets/qemu-share/keymaps/en-us` 포함. 재측정 대기 중.
