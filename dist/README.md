@@ -1,6 +1,7 @@
 # dist
 
-- `andronia-0.0.17-m1.apk` — 세션 6 debug 서명 APK(sha256 `649e0b47d547673bd78280105f92a7be162a14833020542510ef813ac7a7382d`, 같은 키·같은 패키지라 덮어 설치 가능). **엔진 성능 수정**(패치 0025: SEV 처리, 주소 공간별 TLB 보존 — `docs/optimization.md`). "Android 7 guest…" 메뉴에 "Engine: fast process switching" 추가(기본 켜짐; 0.0.16에 없던 이상 동작이 보이면 꺼서 비교). PC 측정만 있고 기기 미측정.
+- `andronia-0.0.18-m1.apk` — 세션 6 debug 서명 APK(sha256 `b26abe91c0ebe40993dd7ad1622f7dbcbd7cfb1bf10593f185f74e1eb23bbe7b`, 같은 키). 0.0.17-m1에서 기기 소리가 나지 않는다는 보고에 대한 **오디오 계측 빌드**: `perf:` 줄에 `audio=<10초간 받은 kB>kB peak=<최대 진폭> <상태>` 추가, 게스트 `awperf:`에 goldfish 인터럽트 횟수(`9130000.goldfish` = 오디오), 게스트 오디오 오류를 `awcrash:`로 수집, 오디오 소켓이 끊기면 재연결. 엔진은 0.0.17-m1과 같다. PC에서는 0.0.17 엔진으로 소리가 정상 출력되어 원인은 미확정.
+- (이전) `andronia-0.0.17-m1.apk` — 저장소에서 제거됨(git 기록에 남음). 세션 6 debug 서명 APK(sha256 `649e0b47d547673bd78280105f92a7be162a14833020542510ef813ac7a7382d`, 같은 키·같은 패키지라 덮어 설치 가능). **엔진 성능 수정**(패치 0025: SEV 처리, 주소 공간별 TLB 보존 — `docs/optimization.md`). "Android 7 guest…" 메뉴에 "Engine: fast process switching" 추가(기본 켜짐; 0.0.16에 없던 이상 동작이 보이면 꺼서 비교). PC 측정만 있고 기기 미측정.
 - (이전) `andronia-0.0.16-m1.apk` — 저장소에서 제거됨(git 기록에 남음). 세션 5 debug 서명 APK(sha256 `ac053ee46d8c37faed0bcf1ebca4e9c17e4279eac8a9dc5c25d7c75e95ddd332`, 같은 키·같은 패키지 `dev.androidware.app`라 덮어 설치 가능). 앱 표시 이름을 **Andronia**로, 아이콘을 사용자 제공 이미지로 변경. 기능은 0.0.15-m1과 같다.
 - (이전) `androidware-0.0.15-m1.apk` — 저장소에서 제거됨(git 기록에 남음). 세션 5 debug 서명 APK(sha256 `95eef83f13de20f3190d27f341f1984258df2ad697016bdf1c612e949a04c153`, 같은 키). 터치 이동 전송을 초당 약 60회로 합침(QEMU 모니터 스레드 부하 제거), 게스트 CPU 기본값 2로 복귀, 계측 강화(`perf:` 줄의 sys 비율, 게스트 내부 `awperf:` 1분 간격 — Export log에만 기록).
 - (이전) `androidware-0.0.14-m1.apk` — 저장소에서 제거됨(git 기록에 남음). 세션 5 debug 서명 APK(sha256 `2e64384af059a3d6e2534b8b0eb1976b0553d476ef607e8e4a6aa68c6dd9b3bb`, 같은 키). **멀티터치**(최대 10점, QMP `mtt` → goldfish-events), 게스트 CPU 수 설정("Android 7 guest…" → Guest CPUs, 8코어 이상 기기 기본 4), 10초마다 `perf:` 줄(화면 fps, 엔진·앱 스레드별 CPU 사용률).
@@ -12,7 +13,7 @@
 - (이전) `androidware-0.0.8-m1.apk` — 세션 3 debug 서명 APK(sha256 `5d7d68d8ce6405f86ac04df9fa8a929aab3b69bfd5f4b0ccbbb8c425f19b38c1`). 0.0.7-m1에 **Fullscreen** 버튼(화면 가장자리에서 쓸어 넣으면 해제)과 게스트 해상도 선택("Android 7 guest…" → Resolution…: 320x480 / 480x800 / 540x960 / 720x1280, 다음 Start Android부터 적용)을 추가. 엔진 패치 0024(goldfish 화면·입력·배터리·오디오, 화면 버퍼 크래시 수정), "Android 7 guest…"/"Start Android", **Import game APK → 다음 Start Android에서 자동 설치·실행**, 게스트 오디오 재생, SD 카드. 0.0.6-m1과 같은 debug 키. 게스트 Android 이미지는 포함하지 않는다(앱이 dl.google.com에서 받음). 이 세션의 debug 키는 이전 APK와 다르므로 `adb uninstall dev.androidware.app` 후 설치.
 - (이전) `androidware-0.0.5-m0.apk` — 세션 1(2026-11-05) debug APK. 저장소에서 제거됨(git 기록에 남음). 포함물: 앱 dex, `lib/arm64-v8a/libqemu-system-aarch64.so`(QEMU 11.1.3 aarch64-softmmu, TCG/VNC/QMP/slirp, 스트립), `lib/arm64-v8a/libqemu-arm.so`(QEMU arm-linux-user), `assets/selftest/bench-*-bionic`.
 - 서명: 자체 생성 debug 키(`.debug.keystore`, 저장소 미포함). 재빌드하면 키가 바뀌므로 재설치 시 `adb uninstall dev.androidware.app` 후 설치한다.
-- 설치: APK 파일을 폰에서 직접 열어 설치하거나 `adb install -r dist/andronia-0.0.17-m1.apk`
+- 설치: APK 파일을 폰에서 직접 열어 설치하거나 `adb install -r dist/andronia-0.0.18-m1.apk`
 - 기기 결과(사용자 스크린샷, 0.0.7-m1, 2026-11-10): Start Android로 홈 화면 표시, 터치 동작. 게임 실행은 미확인. `docs/device-test-procedure.md`를 따라 측정한다.
 - GPL-2.0 구성 요소(QEMU)가 포함되므로 배포 시 대응 소스(업스트림 태그 + `engine/qemu/patches`)를 함께 제공해야 한다.
 

@@ -78,7 +78,7 @@ public final class GuestMedia {
      * console, where the app shows them and "Export log" includes them. The guest has no adb.
      */
     static final String CRASHLOG_SCRIPT = "#!/system/bin/sh\n"
-            + "logcat -b crash -b main -v brief AndroidRuntime:E DEBUG:I libEGL:W EGL_emulation:E chromium:F linker:W '*:S' | while read -r l; do\n"
+            + "logcat -b crash -b main -v brief AndroidRuntime:E DEBUG:I libEGL:W EGL_emulation:E chromium:F linker:W AudioFlinger:E audio_hw_generic:E AudioTrack:E '*:S' | while read -r l; do\n"
             + "  echo \"awcrash: $l\" > /dev/kmsg\n"
             + "done\n";
 
@@ -91,6 +91,7 @@ public final class GuestMedia {
             + "while true; do\n"
             + "  sleep 55\n"
             + "  top -n 1 -d 5 -m 10 -t | while read -r l; do [ -n \"$l\" ] && echo \"awperf: $l\" > /dev/kmsg; done\n"
+            + "  grep goldfish /proc/interrupts | while read -r l; do echo \"awperf: irq $l\" > /dev/kmsg; done\n"
             + "done\n";
 
     static final String RC_ADDITION = "\n# --- androidware ---\n"

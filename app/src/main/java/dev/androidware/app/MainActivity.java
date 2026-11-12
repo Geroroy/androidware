@@ -98,7 +98,7 @@ public class MainActivity extends Activity implements EngineService.LogListener,
             startActivityForResult(i, REQ_EXPORT);
         });
 
-        log("Andronia 0.0.17-m1; profile=" + profile.name + " kernel=" + profile.kernel + " initrd=" + profile.initrd + " disk=" + profile.disk);
+        log("Andronia 0.0.18-m1; profile=" + profile.name + " kernel=" + profile.kernel + " initrd=" + profile.initrd + " disk=" + profile.disk);
         Intent svc = new Intent(this, EngineService.class);
         bindService(svc, conn, Context.BIND_AUTO_CREATE);
     }
@@ -365,6 +365,7 @@ public class MainActivity extends Activity implements EngineService.LogListener,
         Thread t = new Thread(() -> {
             java.util.Map<String, long[]> prev = new java.util.HashMap<>();
             long prevFrames = GlRenderer.frameCount(), prevMs = System.currentTimeMillis();
+            long[] prevAudio = {0};
             long hz = 100;
             try { hz = android.system.Os.sysconf(android.system.OsConstants._SC_CLK_TCK); } catch (Throwable ignored) {}
             while (service != null && service.isRunning()) {
@@ -377,6 +378,7 @@ public class MainActivity extends Activity implements EngineService.LogListener,
                 readThreads("/proc/self/task", "app", cur);
                 StringBuilder sb = new StringBuilder("perf:");
                 if (GlRenderer.isRunning()) sb.append(String.format(Locale.US, " fps=%.1f", (frames - prevFrames) / secs));
+                sb.append(' ').append(audio.statsAndReset(prevAudio));
                 java.util.List<String> busy = new java.util.ArrayList<>();
                 for (java.util.Map.Entry<String, long[]> en : cur.entrySet()) {
                     long[] p = prev.get(en.getKey());
