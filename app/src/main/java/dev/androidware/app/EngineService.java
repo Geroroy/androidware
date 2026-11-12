@@ -81,6 +81,11 @@ public class EngineService extends Service {
         env.put("TMPDIR", ctx.getCacheDir().getAbsolutePath());
         env.put("HOME", ctx.getFilesDir().getAbsolutePath());
         env.put("LD_LIBRARY_PATH", ctx.getApplicationInfo().nativeLibraryDir);
+        if (GuestProfile.KIND_ANDROID_RANCHU.equals(profile.kind)) {
+            boolean fast = AndroidGuest.fastSwitch(ctx);
+            if (!fast) env.put("AW_TLB_CTX", "0");   // engine patch 0025: keep-TLB-per-address-space off
+            emit("engine: fast process switching " + (fast ? "on" : "off (compatibility mode)"));
+        }
         final Process p = pb.start();
         proc = p;
         final File logFile = new File(QemuLauncher.runtimeDir(ctx), "qemu.log");

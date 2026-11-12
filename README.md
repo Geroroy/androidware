@@ -16,7 +16,8 @@
 - (세션 5) 기기 보고: N.O.V.A. 3 플레이 진입했으나 **랙이 심하고 동시 터치 불가**. 0.0.14-m1: 멀티터치 추가(PC에서 2점 동시 접촉 확인), 게스트 CPU 2→4(8코어 기기), 성능 계측 줄(`perf:`) 추가. 성능 원인은 미측정.
 - (세션 5) 기기 실측 11차(0.0.14-m1): 게임 중 4~7 fps, vCPU 0만 95%·나머지 약 35%, 터치 중 QEMU 모니터 스레드 20~33%, 오디오 끊김. 0.0.15-m1: 터치 이동 합치기, CPU 기본 2, 게스트 내부 계측. **성능 병목(게임 스레드의 TCG 번역 vs 커널/GL 파이프)은 아직 미확정.**
 - (세션 5) 0.0.16-m1: 앱 표시 이름 **Andronia**, 새 아이콘(사용자 제공). 패키지 ID(`dev.androidware.app`)와 저장소·코드 이름은 그대로.
-- 남은 핵심 과제: 기기에서 GPU 모드 확인, 실제 게임(검은방, N.O.V.A. 3) 실행 확인.
+- (세션 6, 2026-11-12) 0.0.17-m1: **엔진 성능 수정**(패치 0025, `docs/optimization.md`). PC 프로파일에서 엔진 CPU 시간의 22%만 게스트 코드 실행에 쓰이고 있었다. (1) 게스트 스핀락 해제마다 다른 vCPU를 깨우던 SEV 처리 제거, (2) 게스트 프로세스 전환마다 TLB를 비우는 대신 주소 공간별로 보관. PC: 프로세스 왕복 전환 290~382 µs → 62~78 µs, 앱 콜드 스타트 12~18% 단축, 테스트 앱 36 → 45~49 fps. 순수 번역 속도(정수/FP 벤치)는 그대로. **기기 미측정.**
+- 남은 핵심 과제: 기기에서 0.0.17-m1의 N.O.V.A. 3 fps 측정, 검은방 실행 확인.
 
 ## 한 줄 결론 (2026-11-05)
 - 대상 기기는 32비트 ARM 코드를 하드웨어로 실행하지 못한다(Samsung 공식). 모든 경로에 소프트웨어 명령어 번역이 필요하다.
@@ -29,8 +30,8 @@ app/            Android 앱 (Java, AGP 없이 빌드). MainActivity, EngineServi
 engine/qemu/    QEMU Android 패치(Termux 유래, GPL-2.0) 및 setjmp 보조 파일
 engine/build/   크로스 빌드용 meson cross 파일 템플릿, glib Android 패치
 scripts/        fetch-engine-sources.sh, build-engine.sh, build-apk.sh, fetch-test-guest.sh, fetch-android-guest.sh, install-and-run.sh
-experiments/    PC(x86_64)에서 수행한 실험: TCG/AArch32(pc-tcg-aarch32), Android 7 게스트 부팅·GLES1 테스트 앱(android-guest)
-docs/           방식 비교, 근거, 결정 기록, 아키텍처, 의존성, 호환성 표, 상태/다음 단계, 기기 테스트 절차
+experiments/    PC(x86_64)에서 수행한 실험: TCG/AArch32(pc-tcg-aarch32), Android 7 게스트 부팅·GLES1 테스트 앱(android-guest), 성능 측정 하네스(android-guest/perf)
+docs/           방식 비교, 근거, 결정 기록, 아키텍처, 의존성, 호환성 표, 상태/다음 단계, 기기 테스트 절차, 성능 최적화(optimization.md)
 dist/           현재 단계에서 생성한 debug APK
 ```
 

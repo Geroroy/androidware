@@ -1,0 +1,1318 @@
+androidware: TCG performance for a 32-bit Arm Linux/Android guest (multi-threaded TCG)
+
+Found by profiling an Android 7.0 ARMv7 guest (see docs/optimization.md):
+
+1. SEV/WFE (target/arm/tcg/op_helper.c, translate.c, translate-a64.c)
+   Linux/ARM executes SEV on every spin_unlock. helper_sev kicked every other
+   vCPU each time (forcing it out of translated code, waking its host thread
+   if it idled in WFI). With MTTCG, WFE is now a NOP (the guest spins, as QEMU
+   did before WFE/SEV were modelled) and SEV emits no code; without MTTCG SEV
+   only wakes CPUs that actually sleep in WFE.
+
+2. Saved address-space contexts (accel/tcg/cputlb.c, include/exec/cputlb.h,
+   target/arm/helper.c, target/arm/tcg/tlb-insns.c)
+   A change of the ASID (CONTEXTIDR, short-descriptor format) flushed the whole
+   softmmu TLB and the jump cache, on every switch between two processes. Each
+   vCPU now keeps the TLB tables and jump cache of the last 16 address spaces
+   and swaps them. Page invalidations are applied to all of them, any other
+   flush drops them, TLBIASID drops the one address space. A context is tagged
+   with the TTBR0 it was used with and flushed if the guest reuses the ASID
+   with another table. AW_TLB_CTX=0 restores the old behaviour,
+   AW_TLB_CTX=verify compares the live TLB with page table walks after every
+   switch.
+
+3. Large page tracking (accel/tcg/cputlb.c, include/hw/core/cpu.h)
+   The region of large pages is kept as an interval instead of an aligned
+   power-of-two block, so that a kmap/vmalloc page flush no longer empties the
+   kernel-mode TLB of a guest whose lowmem is mapped with 1 MB sections.
+
+--- a/target/arm/tcg/op_helper.c
++++ b/target/arm/tcg/op_helper.c
+@@ -478,8 +478,19 @@
+     CPUState *cs = env_cpu(env);
+     CPU_FOREACH(cs) {
+         ARMCPU *target_cpu = ARM_CPU(cs);
+-        target_cpu->env.event_register = true;
+-        if (!qemu_cpu_is_self(cs)) {
++        qatomic_set(&target_cpu->env.event_register, true);
++        /*
++         * androidware: only wake CPUs that are actually sleeping in WFE.
++         * Linux/ARM executes SEV on every spin_unlock; kicking every other
++         * vCPU each time forces it out of translated code and, if it idles
++         * in WFI, wakes its host thread for nothing (measured: about a
++         * quarter of all host CPU time of an Android guest).
++         * The store above and the load below pair with the store to
++         * cs->halted and the load of event_register in arm_cpu_has_work().
++         */
++        smp_mb();
++        if (!qemu_cpu_is_self(cs) && qatomic_read(&cs->halted) &&
++            qatomic_read(&target_cpu->env.halt_reason) == HALT_WFE) {
+             qemu_cpu_kick(cs);
+         }
+     }
+--- a/target/arm/tcg/translate.c
++++ b/target/arm/tcg/translate.c
+@@ -3262,8 +3262,13 @@
+      * will be because they want SEV, not because they want a NOP.)
+      */
+ #ifndef CONFIG_USER_ONLY
+-    if (arm_dc_feature(s, ARM_FEATURE_M) ||
+-        arm_dc_feature(s, ARM_FEATURE_V6K)) {
++    /*
++     * androidware: with multi-threaded TCG, WFE is a NOP (see trans_WFE), so
++     * nothing ever waits for the event and SEV needs no code at all.
++     */
++    if ((arm_dc_feature(s, ARM_FEATURE_M) ||
++         arm_dc_feature(s, ARM_FEATURE_V6K)) &&
++        !(tb_cflags(s->base.tb) & CF_PARALLEL)) {
+         gen_helper_sev(tcg_env);
+     }
+ #endif
+@@ -3290,8 +3295,16 @@
+      * hint on older architectures, with the same conditions
+      * as SEV.
+      */
+-    if (arm_dc_feature(s, ARM_FEATURE_M) ||
+-        arm_dc_feature(s, ARM_FEATURE_V6K)) {
++    /*
++     * androidware: with multi-threaded TCG every vCPU has its own host
++     * thread, so the guest's WFE loops (Linux spinlock slow path) simply
++     * spin, as QEMU did before WFE/SEV were modelled. Halting the host
++     * thread and waking it through a futex costs far more than the few
++     * instructions a spinlock is held for.
++     */
++    if ((arm_dc_feature(s, ARM_FEATURE_M) ||
++         arm_dc_feature(s, ARM_FEATURE_V6K)) &&
++        !(tb_cflags(s->base.tb) & CF_PARALLEL)) {
+         gen_update_pc(s, curr_insn_len(s));
+         s->base.is_jmp = DISAS_WFE;
+     }
+--- a/target/arm/tcg/translate-a64.c
++++ b/target/arm/tcg/translate-a64.c
+@@ -2148,7 +2148,13 @@
+      * SEV is a NOP for user-mode emulation.
+      */
+ #ifndef CONFIG_USER_ONLY
+-    gen_helper_sev(tcg_env);
++    /*
++     * androidware: with multi-threaded TCG, WFE is a NOP (see trans_WFE);
++     * only WFET can still wait for the event.
++     */
++    if (!(tb_cflags(s->base.tb) & CF_PARALLEL) || dc_isar_feature(aa64_wfxt, s)) {
++        gen_helper_sev(tcg_env);
++    }
+ #endif
+     return true;
+ }
+@@ -2161,7 +2167,10 @@
+ 
+ static bool trans_WFE(DisasContext *s, arg_WFI *a)
+ {
+-    s->base.is_jmp = DISAS_WFE;
++    /* androidware: spin instead of halting under multi-threaded TCG (see the A32 trans_WFE) */
++    if (!(tb_cflags(s->base.tb) & CF_PARALLEL)) {
++        s->base.is_jmp = DISAS_WFE;
++    }
+     return true;
+ }
+ 
+--- a/target/arm/tcg/tlb-insns.c
++++ b/target/arm/tcg/tlb-insns.c
+@@ -50,22 +50,44 @@
+ static void tlbiall_is_write(CPUARMState *env, const ARMCPRegInfo *ri,
+                              uint64_t value)
+ {
++    arm_tlb_selfcheck_note(2, 0);
+     CPUState *cs = env_cpu(env);
+ 
+     tlb_flush_all_cpus_synced(cs);
+ }
+ 
++/*
++ * androidware: with saved TLB contexts (exec/cputlb.h) an invalidation by
++ * ASID only has to drop that address space: the live TLB of a CPU that is
++ * running it, the saved context elsewhere.
++ */
++static bool tlb_asid_is_current(CPUState *cs, uint32_t asid)
++{
++    return (ARM_CPU(cs)->env.cp15.contextidr_el[1] & 0xff) == asid;
++}
++
++static bool tlb_asid_contexts(CPUARMState *env)
++{
++    return arm_tlb_contexts_ok(env) && !extended_addresses_enabled(env);
++}
++
+ static void tlbiasid_is_write(CPUARMState *env, const ARMCPRegInfo *ri,
+                              uint64_t value)
+ {
++    arm_tlb_selfcheck_note(1, value);
+     CPUState *cs = env_cpu(env);
+ 
+-    tlb_flush_all_cpus_synced(cs);
++    if (tlb_asid_contexts(env)) {
++        tlb_flush_context_all_cpus_synced(cs, value & 0xff, tlb_asid_is_current);
++    } else {
++        tlb_flush_all_cpus_synced(cs);
++    }
+ }
+ 
+ static void tlbimva_is_write(CPUARMState *env, const ARMCPRegInfo *ri,
+                              uint64_t value)
+ {
++    arm_tlb_selfcheck_note(0, value);
+     CPUState *cs = env_cpu(env);
+ 
+     tlb_flush_page_all_cpus_synced(cs, value & TARGET_PAGE_MASK);
+@@ -74,6 +96,7 @@
+ static void tlbimvaa_is_write(CPUARMState *env, const ARMCPRegInfo *ri,
+                              uint64_t value)
+ {
++    arm_tlb_selfcheck_note(3, value);
+     CPUState *cs = env_cpu(env);
+ 
+     tlb_flush_page_all_cpus_synced(cs, value & TARGET_PAGE_MASK);
+@@ -92,6 +115,7 @@
+ static void tlbiall_write(CPUARMState *env, const ARMCPRegInfo *ri,
+                           uint64_t value)
+ {
++    arm_tlb_selfcheck_note(2, 0);
+     /* Invalidate all (TLBIALL) */
+     CPUState *cs = env_cpu(env);
+ 
+@@ -105,6 +129,7 @@
+ static void tlbimva_write(CPUARMState *env, const ARMCPRegInfo *ri,
+                           uint64_t value)
+ {
++    arm_tlb_selfcheck_note(0, value);
+     /* Invalidate single TLB entry by MVA and ASID (TLBIMVA) */
+     CPUState *cs = env_cpu(env);
+ 
+@@ -119,10 +144,17 @@
+ static void tlbiasid_write(CPUARMState *env, const ARMCPRegInfo *ri,
+                            uint64_t value)
+ {
++    arm_tlb_selfcheck_note(1, value);
+     /* Invalidate by ASID (TLBIASID) */
+     CPUState *cs = env_cpu(env);
+ 
+-    if (tlb_force_broadcast(env)) {
++    if (tlb_asid_contexts(env)) {
++        if (tlb_force_broadcast(env)) {
++            tlb_flush_context_all_cpus_synced(cs, value & 0xff, tlb_asid_is_current);
++        } else {
++            tlb_flush_context(cs, value & 0xff, tlb_asid_is_current(cs, value & 0xff));
++        }
++    } else if (tlb_force_broadcast(env)) {
+         tlb_flush_all_cpus_synced(cs);
+     } else {
+         tlb_flush(cs);
+@@ -132,6 +164,7 @@
+ static void tlbimvaa_write(CPUARMState *env, const ARMCPRegInfo *ri,
+                            uint64_t value)
+ {
++    arm_tlb_selfcheck_note(3, value);
+     /* Invalidate single entry by MVA, all ASIDs (TLBIMVAA) */
+     CPUState *cs = env_cpu(env);
+ 
+--- a/target/arm/helper.c
++++ b/target/arm/helper.c
+@@ -7,6 +7,7 @@
+  */
+ 
+ #include "qemu/osdep.h"
++#include "exec/target_page.h"
+ #include "qemu/log.h"
+ #include "trace.h"
+ #include "cpu.h"
+@@ -387,6 +388,235 @@
+     }
+ }
+ 
++#ifdef CONFIG_USER_ONLY
++void arm_tlb_contexts_selfcheck(CPUARMState *env, const char *why)
++{
++}
++
++void arm_tlb_selfcheck_note(int kind, uint64_t value)
++{
++}
++#else
++/*
++ * androidware: self-check for the saved TLB contexts (AW_TLB_CTX=verify in
++ * the environment). After the guest has installed an address space, every
++ * entry of the live TLB is compared with a fresh page table walk. A
++ * mismatch means an entry outlived the guest's invalidation.
++ */
++static int arm_tlb_selfcheck_mode(void)
++{
++    static int mode = -1;
++
++    if (unlikely(mode < 0)) {
++        const char *e = getenv("AW_TLB_CTX");
++        mode = e && !strcmp(e, "verify");
++    }
++    return mode;
++}
++
++/*
++ * A mismatch is not necessarily an error: Linux clears page table entries
++ * first and invalidates the TLB a little later (munmap/madvise batches, fork
++ * write-protection, lazily freed vmalloc areas), and another CPU's
++ * invalidation may still be queued for this one. Such an entry is gone the
++ * next time we look. Only a mismatch that is still there SELFCHECK_PERSIST_NS
++ * later, outside the lazily flushed vmalloc range, is reported as an error.
++ */
++#define SELFCHECK_SUSPECTS 8192
++#define SELFCHECK_PERSIST_NS (300 * 1000 * 1000LL)
++typedef struct {
++    bool used;
++    int cpu, mmu_idx, access;
++    uint32_t asid;
++    vaddr page;
++    int64_t first_seen;
++    unsigned long round;
++    bool counted_lazy;
++} ARMTLBSuspect;
++static ARMTLBSuspect selfcheck_suspects[SELFCHECK_SUSPECTS];
++/* guest invalidations seen (any CPU), to tell "QEMU missed it" from "the guest never asked" */
++static QemuMutex selfcheck_lock;
++static unsigned long selfcheck_checked, selfcheck_transient, selfcheck_pending, selfcheck_persistent, selfcheck_rounds;
++static struct { vaddr page; int asid; int64_t ns; } selfcheck_page_flush[65536];
++static int64_t selfcheck_asid_flush[256], selfcheck_all_flush;
++
++static unsigned selfcheck_page_hash(vaddr page, int asid)
++{
++    return ((page >> 12) ^ (asid * 0x9e5)) & 0xffff;
++}
++
++/* kind 0: page, value = va | asid (asid < 0: every asid); 1: asid; 2: all */
++void arm_tlb_selfcheck_note(int kind, uint64_t value)
++{
++    int64_t now;
++
++    if (likely(!arm_tlb_selfcheck_mode())) {
++        return;
++    }
++    now = get_clock_realtime();
++    if (kind == 0 || kind == 3) {
++        vaddr page = value & ~0xfffull;
++        if (kind == 3) {            /* all ASIDs: note it for each */
++            for (int a = 0; a < 256; a++) {
++                unsigned h = selfcheck_page_hash(page, a);
++                selfcheck_page_flush[h].page = page;
++                selfcheck_page_flush[h].asid = a;
++                selfcheck_page_flush[h].ns = now;
++            }
++        } else {
++            unsigned h = selfcheck_page_hash(page, value & 0xff);
++            selfcheck_page_flush[h].page = page;
++            selfcheck_page_flush[h].asid = value & 0xff;
++            selfcheck_page_flush[h].ns = now;
++        }
++    } else if (kind == 1) {
++        selfcheck_asid_flush[value & 0xff] = now;
++    } else {
++        selfcheck_all_flush = now;
++    }
++}
++
++/* Latest guest invalidation that covers (@asid, @page), 0 if none is remembered. */
++static int64_t selfcheck_covered(vaddr page, int asid)
++{
++    unsigned h = selfcheck_page_hash(page, asid);
++    int64_t t = MAX(selfcheck_asid_flush[asid], selfcheck_all_flush);
++
++    if (selfcheck_page_flush[h].page == page && selfcheck_page_flush[h].asid == asid) {
++        t = MAX(t, selfcheck_page_flush[h].ns);
++    }
++    return t;
++}
++
++typedef struct {
++    CPUARMState *env;
++    const char *why;
++    uint32_t asid;
++    unsigned long round;
++    int64_t now;
++    unsigned checked;
++} ARMTLBSelfcheck;
++
++static void arm_tlb_selfcheck_entry(CPUState *cs, int mmu_idx, vaddr page, bool r, bool w, bool x,
++                                    hwaddr phys, void *opaque)
++{
++    static const MMUAccessType types[3] = { MMU_DATA_LOAD, MMU_DATA_STORE, MMU_INST_FETCH };
++    ARMTLBSelfcheck *c = opaque;
++    bool want[3] = { r, w, x };
++
++    for (int t = 0; t < 3; t++) {
++        GetPhysAddrResult res = {};
++        ARMMMUFaultInfo fi = {};
++        ARMTLBSuspect *sp = NULL, *free_sp = NULL;
++
++        if (!want[t]) {
++            continue;
++        }
++        c->checked++;
++        /* get_phys_addr() returns true on success */
++        if (get_phys_addr(c->env, page, types[t], 0, core_to_arm_mmu_idx(c->env, mmu_idx), &res, &fi)
++            && (res.f.phys_addr & (hwaddr)(int64_t)qemu_target_page_mask()) == phys) {
++            continue;
++        }
++        for (int i = 0; i < SELFCHECK_SUSPECTS; i++) {
++            ARMTLBSuspect *q = &selfcheck_suspects[i];
++            if (!q->used) {
++                free_sp = free_sp ? free_sp : q;
++            } else if (q->cpu == cs->cpu_index && q->asid == c->asid && q->mmu_idx == mmu_idx &&
++                       q->access == t && q->page == page) {
++                sp = q;
++                break;
++            }
++        }
++        if (!sp) {
++            selfcheck_transient++;
++            if (free_sp) {
++                *free_sp = (ARMTLBSuspect){ .used = true, .cpu = cs->cpu_index, .mmu_idx = mmu_idx, .access = t,
++                                            .asid = c->asid, .page = page, .first_seen = c->now, .round = c->round };
++            }
++            continue;
++        }
++        sp->round = c->round;
++        if (sp->first_seen < 0) {
++            continue;       /* already reported */
++        }
++        {
++            /*
++             * The decisive test: the guest invalidated this page (or its
++             * address space, or everything) after we first saw the
++             * mismatch, the invalidation has had ample time to be processed
++             * on this CPU, and the entry is still here.
++             */
++            int64_t cov = selfcheck_covered(page, c->asid);
++            bool kernel_va = page >= 0xc0000000u;
++
++            if (kernel_va) {
++                /* global mapping: any ASID in the invalidation matches */
++                for (int a = 0; a < 256; a++) {
++                    unsigned h = selfcheck_page_hash(page, a);
++                    if (selfcheck_page_flush[h].page == page && selfcheck_page_flush[h].asid == a) {
++                        cov = MAX(cov, selfcheck_page_flush[h].ns);
++                    }
++                }
++            }
++            if (cov > sp->first_seen && c->now - cov > 100 * 1000 * 1000LL) {
++                selfcheck_persistent++;
++                error_report("androidware: STALE TLB entry SURVIVED INVALIDATION: cpu %d mmu_idx %d va 0x%" VADDR_PRIx
++                             " access %d cached pa 0x%" HWADDR_PRIx " walk %s 0x%" HWADDR_PRIx
++                             " (contextidr 0x%x ttbr0 0x%" PRIx64 ") first mismatch %" PRId64 " ms ago,"
++                             " invalidated %" PRId64 " ms ago",
++                             cs->cpu_index, mmu_idx, page, t, phys,
++                             fi.type != ARMFault_None ? "FAULT" : "pa",
++                             (hwaddr)(res.f.phys_addr & (hwaddr)(int64_t)qemu_target_page_mask()),
++                             (unsigned)c->env->cp15.contextidr_el[1], (uint64_t)c->env->cp15.ttbr0_ns,
++                             (c->now - sp->first_seen) / 1000000, (c->now - cov) / 1000000);
++                sp->first_seen = -1;
++            } else if (c->now - sp->first_seen > SELFCHECK_PERSIST_NS && !sp->counted_lazy) {
++                /* cleared by the guest but not (yet) invalidated: process teardown, lazily freed vmalloc areas */
++                sp->counted_lazy = true;
++                selfcheck_pending++;
++            }
++        }
++    }
++}
++
++void arm_tlb_contexts_selfcheck(CPUARMState *env, const char *why)
++{
++    static bool inited;
++    ARMTLBSelfcheck c = { .env = env, .why = why };
++    CPUState *cs = env_cpu(env);
++
++    if (likely(!arm_tlb_selfcheck_mode()) || !arm_tlb_contexts_ok(env) ||
++        extended_addresses_enabled(env) ||
++        env->cp15.ttbr0_ns == env->cp15.ttbr1_ns) {
++        /* TTBR0 == TTBR1: Linux is in the middle of a switch, no user mappings */
++        return;
++    }
++    if (!qatomic_xchg(&inited, true)) {
++        qemu_mutex_init(&selfcheck_lock);
++    }
++    qemu_mutex_lock(&selfcheck_lock);
++    c.asid = env->cp15.contextidr_el[1] & 0xff;
++    c.round = ++selfcheck_rounds;
++    c.now = get_clock_realtime();
++    tlb_visit_entries(cs, arm_tlb_selfcheck_entry, &c);
++    selfcheck_checked += c.checked;
++    /* suspects of this cpu and address space that were not seen again are resolved */
++    for (int i = 0; i < SELFCHECK_SUSPECTS; i++) {
++        ARMTLBSuspect *q = &selfcheck_suspects[i];
++        if (q->used && q->cpu == cs->cpu_index && q->asid == c.asid && q->round != c.round) {
++            q->used = false;
++        }
++    }
++    if ((selfcheck_rounds & 0x3fff) == 0) {
++        error_report("androidware: TLB self-check: %lu rounds, %lu entries checked, %lu transient mismatches, "
++                     "%lu not yet invalidated by the guest after 300 ms, %lu SURVIVED AN INVALIDATION", selfcheck_rounds, selfcheck_checked,
++                     selfcheck_transient, selfcheck_pending, selfcheck_persistent);
++    }
++    qemu_mutex_unlock(&selfcheck_lock);
++}
++#endif /* !CONFIG_USER_ONLY */
++
+ static void contextidr_write(CPUARMState *env, const ARMCPRegInfo *ri,
+                              uint64_t value)
+ {
+@@ -398,8 +628,22 @@
+          * For VMSA (when not using the LPAE long descriptor page table
+          * format) this register includes the ASID, so do a TLB flush.
+          * For PMSA it is purely a process ID and no action is needed.
++         *
++         * androidware: without EL2/EL3 the only tagged regime is the
++         * non-secure PL1&0 one, and its tag is the 8-bit ASID in this
++         * register. Instead of flushing, park the TLB of the old address
++         * space and bring back the one of the new (see exec/cputlb.h).
++         * A change of the PROCID bits alone does not affect translation.
+          */
+-        tlb_flush(CPU(cpu));
++        if (arm_tlb_contexts_ok(env)) {
++            uint32_t old_id = raw_read(env, ri) & 0xff;
++
++            if (old_id != (value & 0xff)) {
++                tlb_switch_context(CPU(cpu), old_id, value & 0xff);
++            }
++        } else {
++            tlb_flush(CPU(cpu));
++        }
+     }
+     raw_write(env, ri, value);
+ }
+@@ -2819,7 +3063,25 @@
+         ARMCPU *cpu = env_archcpu(env);
+         tlb_flush(CPU(cpu));
+     }
+-    raw_write(env, ri, value);
++    {
++        uint64_t old_ttbr0 = env->cp15.ttbr0_ns;
++
++        raw_write(env, ri, value);
++        /*
++         * androidware: a saved TLB context is tagged with the ASID only.
++         * Make sure the guest uses each ASID with one translation table:
++         * tlb_context_check_tag() flushes if it does not. TTBR0 == TTBR1
++         * is Linux's "no user mappings" state during a switch.
++         */
++        if (cpreg_field_type(ri) != MO_64 && env->cp15.ttbr0_ns != old_ttbr0 &&
++            env->cp15.ttbr0_ns != env->cp15.ttbr1_ns &&
++            arm_tlb_contexts_ok(env) && !extended_addresses_enabled(env)) {
++            tlb_context_check_tag(env_cpu(env), env->cp15.ttbr0_ns | 1);
++        }
++    }
++    if (cpreg_field_type(ri) != MO_64) {
++        arm_tlb_contexts_selfcheck(env, "TTBR write");
++    }
+ }
+ 
+ static void vmsa_tcr_ttbr_el2_write(CPUARMState *env, const ARMCPRegInfo *ri,
+--- a/target/arm/internals.h
++++ b/target/arm/internals.h
+@@ -1023,6 +1023,20 @@
+     return coreidx;
+ }
+ 
++/*
++ * androidware: true if the softmmu TLB may be kept per ASID (saved contexts,
++ * see exec/cputlb.h): only the non-secure PL1&0 regime exists.
++ */
++static inline bool arm_tlb_contexts_ok(CPUARMState *env)
++{
++    return !arm_feature(env, ARM_FEATURE_EL2) &&
++           !arm_feature(env, ARM_FEATURE_EL3) &&
++           !arm_feature(env, ARM_FEATURE_M);
++}
++void arm_tlb_contexts_selfcheck(CPUARMState *env, const char *why);
++/* self-check bookkeeping: the guest invalidated a page (kind 0, value = va), an ASID (1) or everything (2) */
++void arm_tlb_selfcheck_note(int kind, uint64_t value);
++
+ static inline ARMMMUIdx core_to_arm_mmu_idx(CPUARMState *env, int mmu_idx)
+ {
+     if (arm_feature(env, ARM_FEATURE_M)) {
+--- a/accel/tcg/cputlb.c
++++ b/accel/tcg/cputlb.c
+@@ -147,19 +147,123 @@
+     desc->window_max_entries = max_entries;
+ }
+ 
++/*
++ * androidware: saved address-space contexts, see exec/cputlb.h.
++ *
++ * Each vCPU owns TLB_CTX_SLOTS + 1 sets of (TLB tables, jump cache). One set
++ * is live, i.e. its descriptors are in cpu->neg.tlb and its jump cache is
++ * cpu->tb_jmp_cache; the others are parked in slots, tagged with the id of
++ * the address space they belong to. Only the vCPU thread changes the slots,
++ * under tlb_c.lock (tlb_reset_dirty() of another thread reads them under the
++ * same lock). The jump caches are also cleared by other threads when a TB is
++ * invalidated; jc[] never changes after creation, and jc_used[] is only
++ * written by the vCPU thread.
++ */
++#define TLB_CTX_SLOTS 16
++
++typedef struct TLBCtxSlot {
++    bool valid;
++    uint32_t id;
++    uint64_t last_use;
++    MMUIdxMap dirty;
++    int jc;
++    uint64_t tag;               /* see tlb_context_check_tag() */
++    CPUTLBDesc d[NB_MMU_MODES];
++    CPUTLBDescFast f[NB_MMU_MODES];
++} TLBCtxSlot;
++
++struct CPUTLBContexts {
++    uint64_t tick;
++    int live_jc;
++    CPUJumpCache *jc[TLB_CTX_SLOTS + 1];
++    bool jc_used[TLB_CTX_SLOTS + 1];
++    size_t n_switch, n_hit, n_tag_mismatch;
++    uint64_t live_tag;
++    TLBCtxSlot slot[TLB_CTX_SLOTS];
++};
++
++/* AW_TLB_CTX=0 in the environment restores the plain "flush on every switch" behaviour. */
++static bool tlb_ctx_enabled(void)
++{
++    static int enabled = -1;
++
++    if (unlikely(enabled < 0)) {
++        const char *e = getenv("AW_TLB_CTX");
++        enabled = !(e && e[0] == '0');
++    }
++    return enabled;
++}
++
++static void tb_jmp_cache_clear_page1(CPUJumpCache *jc, vaddr page_addr)
++{
++    int i, i0 = tb_jmp_cache_hash_page(page_addr);
++
++    for (i = 0; i < TB_JMP_PAGE_SIZE; i++) {
++        qatomic_set(&jc->array[i0 + i].tb, NULL);
++    }
++}
++
+ static void tb_jmp_cache_clear_page(CPUState *cpu, vaddr page_addr)
+ {
+     CPUJumpCache *jc = cpu->tb_jmp_cache;
+-    int i, i0;
++    struct CPUTLBContexts *ctx = cpu->tlb_ctx;
+ 
+     if (unlikely(!jc)) {
+         return;
+     }
++    if (likely(!ctx)) {
++        tb_jmp_cache_clear_page1(jc, page_addr);
++        return;
++    }
++    for (int j = 0; j <= TLB_CTX_SLOTS; j++) {
++        if (ctx->jc_used[j]) {
++            tb_jmp_cache_clear_page1(ctx->jc[j], page_addr);
++        }
++    }
++}
+ 
+-    i0 = tb_jmp_cache_hash_page(page_addr);
+-    for (i = 0; i < TB_JMP_PAGE_SIZE; i++) {
+-        qatomic_set(&jc->array[i0 + i].tb, NULL);
++/*
++ * Called after the live jump cache was cleared, possibly from another thread
++ * (TB invalidation). A saved cache that is missed because the vCPU swaps
++ * caches at the same moment only keeps entries that can no longer hit:
++ * tb_lookup() compares the TB's cflags, and an invalidated TB has CF_INVALID.
++ */
++void tlb_ctx_flush_jmp_caches(CPUState *cpu)
++{
++    struct CPUTLBContexts *ctx = qatomic_read(&cpu->tlb_ctx);
++
++    if (likely(!ctx)) {
++        return;
++    }
++    for (int j = 0; j <= TLB_CTX_SLOTS; j++) {
++        CPUJumpCache *jc = ctx->jc[j];
++
++        if (qatomic_read(&ctx->jc_used[j])) {
++            for (int i = 0; i < TB_JMP_CACHE_SIZE; i++) {
++                if (qatomic_read(&jc->array[i].tb)) {
++                    qatomic_set(&jc->array[i].tb, NULL);
++                }
++            }
++        }
++    }
++}
++
++void tlb_ctx_counts(size_t *pswitch, size_t *phit, size_t *ptag_mismatch)
++{
++    CPUState *cpu;
++    size_t sw = 0, hit = 0, tm = 0;
++
++    CPU_FOREACH(cpu) {
++        struct CPUTLBContexts *ctx = qatomic_read(&cpu->tlb_ctx);
++        if (ctx) {
++            sw += qatomic_read(&ctx->n_switch);
++            hit += qatomic_read(&ctx->n_hit);
++            tm += qatomic_read(&ctx->n_tag_mismatch);
++        }
+     }
++    *pswitch = sw;
++    *phit = hit;
++    *ptag_mismatch = tm;
+ }
+ 
+ /**
+@@ -280,8 +384,8 @@
+ static void tlb_mmu_flush_locked(CPUTLBDesc *desc, CPUTLBDescFast *fast)
+ {
+     desc->n_used_entries = 0;
+-    desc->large_page_addr = -1;
+-    desc->large_page_mask = -1;
++    desc->large_page_addr = -1;     /* empty interval: first > last */
++    desc->large_page_mask = 0;
+     desc->vindex = 0;
+     memset(fast->table, -1, sizeof_tlb(fast));
+     memset(desc->vtable, -1, sizeof(desc->vtable));
+@@ -346,6 +450,23 @@
+         g_free(fast->table);
+         g_free(desc->fulltlb);
+     }
++    if (cpu->tlb_ctx) {
++        struct CPUTLBContexts *ctx = cpu->tlb_ctx;
++
++        for (int s = 0; s < TLB_CTX_SLOTS; s++) {
++            for (i = 0; i < NB_MMU_MODES; i++) {
++                g_free(ctx->slot[s].f[i].table);
++                g_free(ctx->slot[s].d[i].fulltlb);
++            }
++        }
++        for (i = 0; i <= TLB_CTX_SLOTS; i++) {
++            if (ctx->jc[i] != cpu->tb_jmp_cache) {   /* the live one is freed by the caller */
++                g_free(ctx->jc[i]);
++            }
++        }
++        g_free(ctx);
++        cpu->tlb_ctx = NULL;
++    }
+ }
+ 
+ /* flush_all_helper: run fn across all cpus
+@@ -367,9 +488,55 @@
+     }
+ }
+ 
++/* Called with tlb_c.lock held, from the vCPU thread: forget all saved contexts. */
++static void tlb_ctx_invalidate_all_locked(CPUState *cpu)
++{
++    struct CPUTLBContexts *ctx = cpu->tlb_ctx;
++
++    if (likely(!ctx)) {
++        return;
++    }
++    for (int s = 0; s < TLB_CTX_SLOTS; s++) {
++        TLBCtxSlot *slot = &ctx->slot[s];
++        if (slot->valid) {
++            slot->valid = false;
++            /* the tables and the jump cache are emptied before the slot is used again */
++            qatomic_set(&ctx->jc_used[slot->jc], false);
++        }
++    }
++}
++
++/* Called with tlb_c.lock held, from the vCPU thread: forget the saved context @id. */
++static void tlb_ctx_invalidate_id_locked(CPUState *cpu, uint32_t id)
++{
++    struct CPUTLBContexts *ctx = cpu->tlb_ctx;
++
++    if (likely(!ctx)) {
++        return;
++    }
++    for (int s = 0; s < TLB_CTX_SLOTS; s++) {
++        TLBCtxSlot *slot = &ctx->slot[s];
++        if (slot->valid && slot->id == id) {
++            slot->valid = false;
++            qatomic_set(&ctx->jc_used[slot->jc], false);
++        }
++    }
++}
++
++static void tlb_flush_live(CPUState *cpu, MMUIdxMap asked, bool keep_contexts, int64_t drop_id);
++
+ static void tlb_flush_by_mmuidx_async_work(CPUState *cpu, run_on_cpu_data data)
+ {
+-    MMUIdxMap asked = data.host_int;
++    tlb_flush_live(cpu, data.host_int, false, -1);
++}
++
++/*
++ * Flush the mmu indexes @asked of the live TLB. Unless @keep_contexts, all
++ * saved contexts are dropped as well; with it, only the saved context
++ * @drop_id (if >= 0) is dropped.
++ */
++static void tlb_flush_live(CPUState *cpu, MMUIdxMap asked, bool keep_contexts, int64_t drop_id)
++{
+     MMUIdxMap all_dirty, work, to_clean;
+     int64_t now = get_clock_realtime();
+ 
+@@ -379,6 +546,15 @@
+ 
+     qemu_spin_lock(&cpu->neg.tlb.c.lock);
+ 
++    if (!keep_contexts) {
++        tlb_ctx_invalidate_all_locked(cpu);
++    } else if (drop_id >= 0) {
++        tlb_ctx_invalidate_id_locked(cpu, drop_id);
++    }
++    if (asked == ALL_MMUIDX_BITS && cpu->tlb_ctx) {
++        cpu->tlb_ctx->live_tag = 0;
++    }
++
+     all_dirty = cpu->neg.tlb.c.dirty;
+     to_clean = asked & all_dirty;
+     all_dirty &= ~to_clean;
+@@ -391,7 +567,15 @@
+ 
+     qemu_spin_unlock(&cpu->neg.tlb.c.lock);
+ 
+-    tcg_flush_jmp_cache(cpu);
++    if (keep_contexts) {
++        /* only the live jump cache: the saved ones belong to other address spaces */
++        CPUJumpCache *jc = cpu->tb_jmp_cache;
++        for (int i = 0; jc && i < TB_JMP_CACHE_SIZE; i++) {
++            qatomic_set(&jc->array[i].tb, NULL);
++        }
++    } else {
++        tcg_flush_jmp_cache(cpu);
++    }
+ 
+     if (to_clean == ALL_MMUIDX_BITS) {
+         qatomic_set(&cpu->neg.tlb.c.full_flush_count,
+@@ -436,6 +620,238 @@
+     tlb_flush_by_mmuidx_all_cpus_synced(src_cpu, ALL_MMUIDX_BITS);
+ }
+ 
++/* Lazily create the context store of @cpu (vCPU thread). */
++static struct CPUTLBContexts *tlb_ctx_get(CPUState *cpu)
++{
++    struct CPUTLBContexts *ctx = cpu->tlb_ctx;
++
++    if (unlikely(!ctx)) {
++        ctx = g_new0(struct CPUTLBContexts, 1);
++        ctx->jc[0] = cpu->tb_jmp_cache;
++        ctx->jc_used[0] = true;
++        ctx->live_jc = 0;
++        for (int s = 0; s < TLB_CTX_SLOTS; s++) {
++            ctx->jc[s + 1] = g_new0(CPUJumpCache, 1);
++            ctx->slot[s].jc = s + 1;
++        }
++        qemu_spin_lock(&cpu->neg.tlb.c.lock);
++        qatomic_set(&cpu->tlb_ctx, ctx);
++        qemu_spin_unlock(&cpu->neg.tlb.c.lock);
++    }
++    return ctx;
++}
++
++void tlb_switch_context(CPUState *cpu, uint32_t old_id, uint32_t new_id)
++{
++    struct CPUTLBContexts *ctx;
++    CPUTLB *tlb = &cpu->neg.tlb;
++    TLBCtxSlot *target = NULL, *victim = NULL;
++    MMUIdxMap work;
++    int64_t now;
++    int j;
++
++    assert_cpu_is_self(cpu);
++
++    if (old_id == new_id) {
++        return;
++    }
++    if (!tlb_ctx_enabled() || !cpu->tb_jmp_cache) {
++        tlb_flush(cpu);
++        return;
++    }
++    ctx = tlb_ctx_get(cpu);
++    now = get_clock_realtime();
++
++    qemu_spin_lock(&tlb->c.lock);
++
++    /*
++     * The tables are only resized when they are flushed. Without the flush
++     * on every switch that would never happen, so do it here for a table
++     * that has become too full; this loses its entries once per doubling.
++     */
++    for (work = tlb->c.dirty; work != 0; work &= work - 1) {
++        int mmu_idx = ctz32(work);
++        CPUTLBDesc *desc = &tlb->d[mmu_idx];
++        size_t n = tlb_n_entries(cpu_tlb_fast(cpu, mmu_idx));
++
++        if (desc->n_used_entries * 100 / n > 70 && n < (1 << CPU_TLB_DYN_MAX_BITS)) {
++            tlb_flush_one_mmuidx_locked(cpu, mmu_idx, now);
++            tlb->c.dirty &= ~(1u << mmu_idx);
++        }
++    }
++
++    for (int s = 0; s < TLB_CTX_SLOTS; s++) {
++        TLBCtxSlot *slot = &ctx->slot[s];
++
++        if (!slot->valid) {
++            if (!victim || victim->valid) {
++                victim = slot;
++            }
++        } else if (slot->id == new_id && !target) {
++            target = slot;
++        } else if (slot->id == old_id || slot->id == new_id) {
++            /* cannot happen; never keep two contexts with one id */
++            slot->valid = false;
++            qatomic_set(&ctx->jc_used[slot->jc], false);
++            victim = slot;
++        } else if (!victim || (victim->valid && slot->last_use < victim->last_use)) {
++            victim = slot;
++        }
++    }
++
++    qatomic_set(&ctx->n_switch, ctx->n_switch + 1);
++    if (target) {
++        qatomic_set(&ctx->n_hit, ctx->n_hit + 1);
++    } else {
++        /* Recycle a slot: empty its tables and its jump cache. */
++        target = victim;
++        target->valid = false;
++        for (work = target->dirty; work != 0; work &= work - 1) {
++            tlb_mmu_flush_locked(&target->d[ctz32(work)], &target->f[ctz32(work)]);
++        }
++        target->dirty = 0;
++        target->tag = 0;
++        {
++            CPUJumpCache *jc = ctx->jc[target->jc];
++
++            qatomic_set(&ctx->jc_used[target->jc], false);
++            for (int i = 0; i < TB_JMP_CACHE_SIZE; i++) {
++                qatomic_set(&jc->array[i].tb, NULL);
++            }
++            qatomic_set(&ctx->jc_used[target->jc], true);
++        }
++    }
++
++    /* Exchange the live set with the slot. An mmu index that is clean on both sides has nothing to move. */
++    for (work = tlb->c.dirty | target->dirty; work != 0; work &= work - 1) {
++        int mmu_idx = ctz32(work);
++        CPUTLBDesc td;
++        CPUTLBDescFast tf;
++
++        if (!target->f[mmu_idx].table) {
++            tlb_mmu_init(&target->d[mmu_idx], &target->f[mmu_idx], now);
++        }
++        /* NB: the live CPUTLBDescFast array is stored in reverse order, see cpu_tlb_fast() */
++        td = tlb->d[mmu_idx];
++        tf = *cpu_tlb_fast(cpu, mmu_idx);
++        tlb->d[mmu_idx] = target->d[mmu_idx];
++        *cpu_tlb_fast(cpu, mmu_idx) = target->f[mmu_idx];
++        target->d[mmu_idx] = td;
++        target->f[mmu_idx] = tf;
++    }
++    work = tlb->c.dirty;
++    tlb->c.dirty = target->dirty;
++    target->dirty = work;
++
++    {
++        uint64_t tag = ctx->live_tag;
++        ctx->live_tag = target->tag;
++        target->tag = tag;
++    }
++    j = target->jc;
++    target->jc = ctx->live_jc;
++    ctx->live_jc = j;
++    qatomic_set(&cpu->tb_jmp_cache, ctx->jc[j]);
++
++    target->id = old_id;
++    target->valid = true;
++    target->last_use = ++ctx->tick;
++
++    qemu_spin_unlock(&tlb->c.lock);
++}
++
++bool tlb_context_check_tag(CPUState *cpu, uint64_t tag)
++{
++    struct CPUTLBContexts *ctx = cpu->tlb_ctx;
++
++    assert_cpu_is_self(cpu);
++
++    if (!ctx || ctx->live_tag == tag) {
++        return true;
++    }
++    if (ctx->live_tag == 0) {
++        ctx->live_tag = tag;
++        return true;
++    }
++    qatomic_set(&ctx->n_tag_mismatch, ctx->n_tag_mismatch + 1);
++    tlb_flush_live(cpu, ALL_MMUIDX_BITS, true, -1);
++    ctx->live_tag = tag;
++    return false;
++}
++
++void tlb_flush_context(CPUState *cpu, uint32_t id, bool is_current)
++{
++    assert_cpu_is_self(cpu);
++
++    if (is_current) {
++        tlb_flush_live(cpu, ALL_MMUIDX_BITS, true, id);
++    } else if (cpu->tlb_ctx) {
++        qemu_spin_lock(&cpu->neg.tlb.c.lock);
++        tlb_ctx_invalidate_id_locked(cpu, id);
++        qemu_spin_unlock(&cpu->neg.tlb.c.lock);
++    }
++}
++
++typedef struct {
++    uint32_t id;
++    bool (*is_current_fn)(CPUState *, uint32_t);
++} TLBFlushContextData;
++
++static void tlb_flush_context_async_work(CPUState *cpu, run_on_cpu_data data)
++{
++    TLBFlushContextData *d = data.host_ptr;
++
++    tlb_flush_context(cpu, d->id, d->is_current_fn(cpu, d->id));
++    g_free(d);
++}
++
++void tlb_flush_context_all_cpus_synced(CPUState *src, uint32_t id,
++                                       bool (*is_current_fn)(CPUState *, uint32_t))
++{
++    CPUState *cpu;
++
++    CPU_FOREACH(cpu) {
++        TLBFlushContextData *d = g_new(TLBFlushContextData, 1);
++
++        d->id = id;
++        d->is_current_fn = is_current_fn;
++        if (cpu != src) {
++            async_run_on_cpu(cpu, tlb_flush_context_async_work, RUN_ON_CPU_HOST_PTR(d));
++        } else {
++            async_safe_run_on_cpu(cpu, tlb_flush_context_async_work, RUN_ON_CPU_HOST_PTR(d));
++        }
++    }
++}
++
++void tlb_visit_entries(CPUState *cpu, tlb_entry_visitor *fn, void *opaque)
++{
++    assert_cpu_is_self(cpu);
++
++    for (int mmu_idx = 0; mmu_idx < NB_MMU_MODES; mmu_idx++) {
++        CPUTLBDesc *desc = &cpu->neg.tlb.d[mmu_idx];
++        CPUTLBDescFast *fast = cpu_tlb_fast(cpu, mmu_idx);
++        size_t n = tlb_n_entries(fast);
++
++        if (!((cpu->neg.tlb.c.dirty >> mmu_idx) & 1)) {
++            continue;
++        }
++        for (size_t i = 0; i < n + CPU_VTLB_SIZE; i++) {
++            CPUTLBEntry *e = i < n ? &fast->table[i] : &desc->vtable[i - n];
++            CPUTLBEntryFull *full = i < n ? &desc->fulltlb[i] : &desc->vfulltlb[i - n];
++            bool r = !(e->addr_read & TLB_INVALID_MASK) && e->addr_read != -1;
++            bool w = !(e->addr_write & TLB_INVALID_MASK) && e->addr_write != -1;
++            bool x = !(e->addr_code & TLB_INVALID_MASK) && e->addr_code != -1;
++            vaddr page;
++
++            if (!r && !w && !x) {
++                continue;
++            }
++            page = (r ? e->addr_read : w ? e->addr_write : e->addr_code) & TARGET_PAGE_MASK;
++            fn(cpu, mmu_idx, page, r, w, x, full->phys_addr & TARGET_PAGE_MASK, opaque);
++        }
++    }
++}
++
+ static bool tlb_hit_page_mask_anyprot(CPUTLBEntry *tlb_entry,
+                                       vaddr page, vaddr mask)
+ {
+@@ -506,7 +922,7 @@
+     vaddr lp_mask = cpu->neg.tlb.d[midx].large_page_mask;
+ 
+     /* Check if we need to flush due to large pages.  */
+-    if ((page & lp_mask) == lp_addr) {
++    if (page >= lp_addr && page <= lp_mask) {
+         tlb_debug("forcing full flush midx %d (%016"
+                   VADDR_PRIx "/%016" VADDR_PRIx ")\n",
+                   midx, lp_addr, lp_mask);
+@@ -519,6 +935,46 @@
+     }
+ }
+ 
++/* Called with tlb_c.lock held, from the vCPU thread: flush one page from every saved context. */
++static void tlb_ctx_flush_page_locked(CPUState *cpu, vaddr page, MMUIdxMap idxmap)
++{
++    struct CPUTLBContexts *ctx = cpu->tlb_ctx;
++
++    if (likely(!ctx)) {
++        return;
++    }
++    for (int s = 0; s < TLB_CTX_SLOTS; s++) {
++        TLBCtxSlot *slot = &ctx->slot[s];
++        MMUIdxMap work;
++
++        if (!slot->valid) {
++            continue;
++        }
++        for (work = idxmap & slot->dirty; work != 0; work &= work - 1) {
++            int mmu_idx = ctz32(work);
++            CPUTLBDesc *d = &slot->d[mmu_idx];
++            CPUTLBDescFast *f = &slot->f[mmu_idx];
++
++            if (page >= d->large_page_addr && page <= d->large_page_mask) {
++                tlb_mmu_flush_locked(d, f);
++                slot->dirty &= ~(1u << mmu_idx);
++            } else {
++                uintptr_t size_mask = f->mask >> CPU_TLB_ENTRY_BITS;
++                CPUTLBEntry *e = &f->table[(page >> TARGET_PAGE_BITS) & size_mask];
++
++                if (tlb_flush_entry_locked(e, page)) {
++                    d->n_used_entries--;
++                }
++                for (int k = 0; k < CPU_VTLB_SIZE; k++) {
++                    if (tlb_flush_entry_locked(&d->vtable[k], page)) {
++                        d->n_used_entries--;
++                    }
++                }
++            }
++        }
++    }
++}
++
+ /**
+  * tlb_flush_page_by_mmuidx_async_0:
+  * @cpu: cpu on which to flush
+@@ -544,6 +1000,7 @@
+             tlb_flush_page_locked(cpu, mmu_idx, addr);
+         }
+     }
++    tlb_ctx_flush_page_locked(cpu, addr, idxmap);
+     qemu_spin_unlock(&cpu->neg.tlb.c.lock);
+ 
+     /*
+@@ -692,7 +1149,7 @@
+      * Because large_page_mask contains all 1's from the msb,
+      * we only need to test the end of the range.
+      */
+-    if (((addr + len - 1) & d->large_page_mask) == d->large_page_addr) {
++    if (addr <= d->large_page_mask && addr + len - 1 >= d->large_page_addr) {
+         tlb_debug("forcing full flush midx %d ("
+                   "%016" VADDR_PRIx "/%016" VADDR_PRIx ")\n",
+                   midx, d->large_page_addr, d->large_page_mask);
+@@ -734,6 +1191,8 @@
+             tlb_flush_range_locked(cpu, mmu_idx, d.addr, d.len, d.bits);
+         }
+     }
++    /* ranges are rare: do not bother to walk the saved contexts */
++    tlb_ctx_invalidate_all_locked(cpu);
+     qemu_spin_unlock(&cpu->neg.tlb.c.lock);
+ 
+     /*
+@@ -937,6 +1396,32 @@
+                                          start, length);
+         }
+     }
++    if (cpu->tlb_ctx) {
++        /* androidware: the saved contexts must not keep a writable entry for a page with code either */
++        for (int s = 0; s < TLB_CTX_SLOTS; s++) {
++            TLBCtxSlot *slot = &cpu->tlb_ctx->slot[s];
++            MMUIdxMap work;
++
++            if (!slot->valid) {
++                continue;
++            }
++            for (work = slot->dirty; work != 0; work &= work - 1) {
++                CPUTLBDesc *desc = &slot->d[ctz32(work)];
++                CPUTLBDescFast *fast = &slot->f[ctz32(work)];
++                unsigned int n = tlb_n_entries(fast);
++                unsigned int i;
++
++                for (i = 0; i < n; i++) {
++                    tlb_reset_dirty_range_locked(&desc->fulltlb[i], &fast->table[i],
++                                                 start, length);
++                }
++                for (i = 0; i < CPU_VTLB_SIZE; i++) {
++                    tlb_reset_dirty_range_locked(&desc->vfulltlb[i], &desc->vtable[i],
++                                                 start, length);
++                }
++            }
++        }
++    }
+     qemu_spin_unlock(&cpu->neg.tlb.c.lock);
+ }
+ 
+@@ -977,23 +1462,19 @@
+ static void tlb_add_large_page(CPUState *cpu, int mmu_idx,
+                                vaddr addr, uint64_t size)
+ {
+-    vaddr lp_addr = cpu->neg.tlb.d[mmu_idx].large_page_addr;
+-    vaddr lp_mask = ~(size - 1);
++    CPUTLBDesc *d = &cpu->neg.tlb.d[mmu_idx];
++    vaddr first = addr & ~(size - 1);
++    vaddr last = first + size - 1;
+ 
+-    if (lp_addr == (vaddr)-1) {
++    /* androidware: interval [first, last] of all large pages, see CPUTLBDesc */
++    if (d->large_page_addr > d->large_page_mask) {
+         /* No previous large page.  */
+-        lp_addr = addr;
++        d->large_page_addr = first;
++        d->large_page_mask = last;
+     } else {
+-        /* Extend the existing region to include the new page.
+-           This is a compromise between unnecessary flushes and
+-           the cost of maintaining a full variable size TLB.  */
+-        lp_mask &= cpu->neg.tlb.d[mmu_idx].large_page_mask;
+-        while (((lp_addr ^ addr) & lp_mask) != 0) {
+-            lp_mask <<= 1;
+-        }
++        d->large_page_addr = MIN(d->large_page_addr, first);
++        d->large_page_mask = MAX(d->large_page_mask, last);
+     }
+-    cpu->neg.tlb.d[mmu_idx].large_page_addr = lp_addr & lp_mask;
+-    cpu->neg.tlb.d[mmu_idx].large_page_mask = lp_mask;
+ }
+ 
+ static inline void tlb_set_compare(CPUTLBEntryFull *full, CPUTLBEntry *ent,
+--- a/accel/tcg/translate-all.c
++++ b/accel/tcg/translate-all.c
+@@ -25,6 +25,7 @@
+ #include "exec/mmap-lock.h"
+ #include "tb-internal.h"
+ #include "exec/tb-flush.h"
++#include "exec/cputlb.h"
+ #include "qemu/cacheinfo.h"
+ #include "qemu/target-info.h"
+ #include "exec/log.h"
+@@ -635,4 +636,8 @@
+     for (int i = 0; i < TB_JMP_CACHE_SIZE; i++) {
+         qatomic_set(&jc->array[i].tb, NULL);
+     }
++#ifndef CONFIG_USER_ONLY
++    /* androidware: also the jump caches of the saved address-space contexts */
++    tlb_ctx_flush_jmp_caches(cpu);
++#endif
+ }
+--- a/accel/tcg/tcg-stats.c
++++ b/accel/tcg/tcg-stats.c
+@@ -7,6 +7,7 @@
+  */
+ 
+ #include "qemu/osdep.h"
++#include "exec/cputlb.h"
+ #include "qemu/accel.h"
+ #include "qemu/qht.h"
+ #include "qapi/error.h"
+@@ -157,6 +158,14 @@
+                            qatomic_read(&tb_ctx.tb_phys_invalidate_count));
+ 
+     tlb_flush_counts(&flush_full, &flush_part, &flush_elide);
++#ifndef CONFIG_USER_ONLY
++    {
++        size_t ctx_switch, ctx_hit, ctx_tag;
++        tlb_ctx_counts(&ctx_switch, &ctx_hit, &ctx_tag);
++        g_string_append_printf(buf, "TLB ctx switches    %zu (saved context found: %zu, id reused by guest: %zu)\n",
++                               ctx_switch, ctx_hit, ctx_tag);
++    }
++#endif
+     g_string_append_printf(buf, "TLB full flushes    %zu\n", flush_full);
+     g_string_append_printf(buf, "TLB partial flushes %zu\n", flush_part);
+     g_string_append_printf(buf, "TLB elided flushes  %zu\n", flush_elide);
+--- a/include/hw/core/cpu.h
++++ b/include/hw/core/cpu.h
+@@ -278,8 +278,13 @@
+     /*
+      * Describe a region covering all of the large pages allocated
+      * into the tlb.  When any page within this region is flushed,
+-     * we must flush the entire tlb.  The region is matched if
+-     * (addr & large_page_mask) == large_page_addr.
++     * we must flush the entire tlb.
++     * androidware: the region is the interval [large_page_addr,
++     * large_page_mask] (first and last byte), empty when first > last,
++     * instead of an aligned power-of-two block. A 32-bit Linux guest maps
++     * its lowmem with 1 MB sections at 0xc0000000..; the block form grew to
++     * 0xc0000000/1 GB and every kmap/vmalloc page flush emptied the kernel
++     * TLB.
+      */
+     vaddr large_page_addr;
+     vaddr large_page_mask;
+@@ -519,6 +524,8 @@
+     MemoryRegion *memory;
+ 
+     struct CPUJumpCache *tb_jmp_cache;
++    /* androidware: saved address-space contexts (TLB + jump cache), see accel/tcg/cputlb.c */
++    struct CPUTLBContexts *tlb_ctx;
+ 
+     GArray *gdb_regs;
+     int gdb_num_regs;
+--- a/include/exec/cputlb.h
++++ b/include/exec/cputlb.h
+@@ -29,6 +29,50 @@
+ #include "system/ram_addr.h"
+ 
+ void tlb_reset_dirty(CPUState *cpu, uintptr_t start, uintptr_t length);
++
++/*
++ * androidware: address-space contexts.
++ *
++ * A guest that tags its translations with an address-space ID (ASID) expects
++ * a TLB to keep the entries of several address spaces at once. The softmmu
++ * TLB has no tag, so targets used to call tlb_flush() whenever the guest
++ * changed the ASID, i.e. on every switch between two processes; the refill
++ * (page walks) and the emptied jump cache then dominate the cost of the
++ * switch. With contexts, each vCPU keeps the TLB and the jump cache of the
++ * last few address spaces and swaps them instead.
++ *
++ * tlb_switch_context(): the guest changed the current ASID from @old_id to
++ * @new_id; must be called from the vCPU thread. Every other flush keeps its
++ * meaning: tlb_flush*() (all or some mmu indexes, ranges) drops all saved
++ * contexts, page flushes are applied to every saved context too.
++ *
++ * tlb_flush_context(): the guest invalidated everything tagged @id (which is
++ * the current address space of this vCPU iff @is_current).
++ * tlb_flush_context_all_cpus_synced(): the same on every vCPU; @is_current_fn
++ * is evaluated on each of them.
++ */
++void tlb_switch_context(CPUState *cpu, uint32_t old_id, uint32_t new_id);
++void tlb_flush_context(CPUState *cpu, uint32_t id, bool is_current);
++void tlb_flush_context_all_cpus_synced(CPUState *src, uint32_t id,
++                                       bool (*is_current_fn)(CPUState *, uint32_t));
++/*
++ * tlb_context_check_tag(): each context remembers one caller-defined, nonzero
++ * @tag (for Arm: the translation table base the address space was used
++ * with). The first call after the context was created or emptied records
++ * it; a later call with a different tag means the guest uses the same ID for
++ * a different address space without having invalidated it (Linux 3.10's
++ * ASID allocator can do that after several rollovers), so the live TLB is
++ * flushed. Returns false in that case. vCPU thread only.
++ */
++bool tlb_context_check_tag(CPUState *cpu, uint64_t tag);
++/* Clear the jump caches of the saved contexts of @cpu (any thread). */
++void tlb_ctx_flush_jmp_caches(CPUState *cpu);
++/* Statistics for the monitor: context switches and how many found a saved context. */
++void tlb_ctx_counts(size_t *pswitch, size_t *phit, size_t *ptag_mismatch);
++/* Calls @fn for every valid entry of the live TLB of @cpu (vCPU thread only; used by self-checks). */
++typedef void tlb_entry_visitor(CPUState *cpu, int mmu_idx, vaddr page, bool r, bool w, bool x,
++                               hwaddr phys, void *opaque);
++void tlb_visit_entries(CPUState *cpu, tlb_entry_visitor *fn, void *opaque);
+ void tlb_reset_dirty_range_all(ram_addr_t start, ram_addr_t length);
+ #endif
+ 
+@@ -236,6 +280,14 @@
+ static inline void tlb_flush(CPUState *cpu)
+ {
+ }
++/* androidware: no softmmu TLB in user mode */
++static inline void tlb_switch_context(CPUState *cpu, uint32_t old_id, uint32_t new_id)
++{
++}
++static inline bool tlb_context_check_tag(CPUState *cpu, uint64_t tag)
++{
++    return true;
++}
+ static inline void tlb_flush_all_cpus_synced(CPUState *src_cpu)
+ {
+ }

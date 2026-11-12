@@ -98,7 +98,7 @@ public class MainActivity extends Activity implements EngineService.LogListener,
             startActivityForResult(i, REQ_EXPORT);
         });
 
-        log("Andronia 0.0.16-m1; profile=" + profile.name + " kernel=" + profile.kernel + " initrd=" + profile.initrd + " disk=" + profile.disk);
+        log("Andronia 0.0.17-m1; profile=" + profile.name + " kernel=" + profile.kernel + " initrd=" + profile.initrd + " disk=" + profile.disk);
         Intent svc = new Intent(this, EngineService.class);
         bindService(svc, conn, Context.BIND_AUTO_CREATE);
     }
@@ -230,7 +230,8 @@ public class MainActivity extends Activity implements EngineService.LogListener,
                 "Factory reset guest data",
                 "Resolution… (now " + AndroidGuest.DISPLAY_LABELS[AndroidGuest.displayMode(this)] + ")",
                 "Graphics: " + (AndroidGuest.hostGpu(this) ? "Host GPU, GLES 2.0 (tap for Software)" : "Software, GLES 1.x (tap for Host GPU)"),
-                "Guest CPUs… (now " + AndroidGuest.cpus(this) + ")"};
+                "Guest CPUs… (now " + AndroidGuest.cpus(this) + ")",
+                "Engine: fast process switching " + (AndroidGuest.fastSwitch(this) ? "on (tap for compatibility mode)" : "off (tap to turn on)")};
         new android.app.AlertDialog.Builder(this)
                 .setTitle("Android 7.0 guest (" + (AndroidGuest.isInstalled(this) ? "installed" : "not installed") + ")")
                 .setItems(items, (d, which) -> {
@@ -267,6 +268,12 @@ public class MainActivity extends Activity implements EngineService.LogListener,
                                     catch (IOException e) { log("cannot save CPU count: " + e); }
                                     d3.dismiss();
                                 }).show();
+                    } else if (which == 6) {
+                        try {
+                            boolean on = !AndroidGuest.fastSwitch(this);
+                            AndroidGuest.setFastSwitch(this, on);
+                            log("engine fast process switching: " + (on ? "on" : "off (compatibility mode, slower)") + "; applies on next Start Android");
+                        } catch (IOException e) { log("cannot save engine setting: " + e); }
                     } else if (which == 3) {
                         new android.app.AlertDialog.Builder(this).setTitle("Guest resolution (applies on next Start Android)")
                                 .setSingleChoiceItems(AndroidGuest.DISPLAY_LABELS, AndroidGuest.displayMode(this), (d3, w3) -> {

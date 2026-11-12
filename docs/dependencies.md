@@ -9,7 +9,7 @@
 | QEMU subproject keycodemapdb | f5772a62ec52591ff6870b7e8ef32482371f22c6 | BSD-2 | 입력 키코드 테이블 생성 | https://github.com/qemu/keycodemapdb |
 | QEMU subproject berkeley-softfloat-3 | b64af41c3276f97f0e181920400ee056b9c88037 | BSD-3 | FP 에뮬레이션 테스트 | https://github.com/qemu/berkeley-softfloat-3 |
 | QEMU subproject berkeley-testfloat-3 | e7af9751d9f9fd3b47911f51a5cfd08af256a9ab | BSD-3 | (빌드 의존) | https://github.com/qemu/berkeley-testfloat-3 |
-| Termux QEMU Android 패치 | termux-packages 20ef6a0bb633ed659685e26dcfe192a81fee83c9 (2026-11-05), `packages/qemu-system-x86-64-headless/0000..0021` + 본 저장소 추가 패치 `0022`, `0023`, `0024`(goldfish 장치, 자체 작성) | 패키지(QEMU) 라이선스 승계 = GPL-2.0 | bionic 호환 패치 (`engine/qemu/patches`) | https://github.com/termux/termux-packages |
+| Termux QEMU Android 패치 | termux-packages 20ef6a0bb633ed659685e26dcfe192a81fee83c9 (2026-11-05), `packages/qemu-system-x86-64-headless/0000..0021` + 본 저장소 추가 패치 `0022`, `0023`, `0024`(goldfish 장치, 자체 작성), `0025`(TCG 성능, 자체 작성) | 패키지(QEMU) 라이선스 승계 = GPL-2.0 | bionic 호환 패치 (`engine/qemu/patches`) | https://github.com/termux/termux-packages |
 | glib | 2.80.0 (Ubuntu noble `glib2.0_2.80.0.orig.tar.xz`) + `engine/build/glib-2.80.0-android-meson.patch` + Termux glib 패치 7개 | LGPL-2.1+ | QEMU 필수 | archive.ubuntu.com (deb-src) |
 | pixman | 0.42.2 (Ubuntu noble orig), `a64-neon` 비활성 | MIT | QEMU 디스플레이 서피스 | archive.ubuntu.com |
 | libffi | 3.4.6 (Ubuntu noble orig) | MIT | glib 의존 | archive.ubuntu.com |

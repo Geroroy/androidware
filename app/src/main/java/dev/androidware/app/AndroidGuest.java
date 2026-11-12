@@ -282,6 +282,18 @@ public final class AndroidGuest {
         try (OutputStream o = new FileOutputStream(cpusFile(ctx))) { o.write(String.valueOf(n).getBytes(java.nio.charset.StandardCharsets.UTF_8)); }
     }
 
+    /**
+     * Engine setting "fast process switching" (default on): the engine keeps the software TLB of the
+     * last guest address spaces instead of flushing it on every switch between two guest processes
+     * (engine patch 0025, docs/optimization.md). Off = the engine's previous behaviour, as a fallback
+     * should a guest misbehave; passed to the engine as AW_TLB_CTX=0 by EngineService.
+     */
+    private static File noCtxFile(Context ctx) { return new File(dir(ctx), "noctx.txt"); }
+    public static boolean fastSwitch(Context ctx) { return !noCtxFile(ctx).isFile(); }
+    public static void setFastSwitch(Context ctx, boolean on) throws IOException {
+        if (on) noCtxFile(ctx).delete(); else { try (OutputStream o = new FileOutputStream(noCtxFile(ctx))) { o.write('1'); } }
+    }
+
     public static int[] displaySize(Context ctx) { return DISPLAY_MODES[displayMode(ctx)]; }
 
     /** Profile that boots the image: ARMv7 CPU, goldfish devices, virtio-mmio disks. */
@@ -291,7 +303,9 @@ public final class AndroidGuest {
         g.name = "android24";
         g.kind = GuestProfile.KIND_ANDROID_RANCHU;
         g.machine = "virt,highmem=off,goldfish=on";
-        g.cpu = "cortex-a15";
+        // pmu=off: the guest does not use the performance counters, and the model otherwise does
+        // PMU bookkeeping on every guest exception (PC: boot and benchmarks unchanged or slightly better).
+        g.cpu = "cortex-a15,pmu=off";
         g.smp = cpus(ctx);
         g.memMb = 1024;
         g.kernel = new File(d, "kernel-ranchu").getAbsolutePath();
