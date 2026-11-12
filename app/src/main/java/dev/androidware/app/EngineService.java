@@ -84,7 +84,7 @@ public class EngineService extends Service {
         if (GuestProfile.KIND_ANDROID_RANCHU.equals(profile.kind)) {
             boolean fast = AndroidGuest.fastSwitch(ctx);
             if (!fast) env.put("AW_TLB_CTX", "0");   // engine patch 0025: keep-TLB-per-address-space off
-            emit("engine: fast process switching " + (fast ? "on" : "off (compatibility mode)"));
+            emit("engine: fast process switching " + (fast ? "on" : "off"));
         }
         final Process p = pb.start();
         proc = p;

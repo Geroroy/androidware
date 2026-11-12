@@ -92,6 +92,9 @@ public final class GuestMedia {
             + "  sleep 55\n"
             + "  top -n 1 -d 5 -m 10 -t | while read -r l; do [ -n \"$l\" ] && echo \"awperf: $l\" > /dev/kmsg; done\n"
             + "  grep goldfish /proc/interrupts | while read -r l; do echo \"awperf: irq $l\" > /dev/kmsg; done\n"
+            // Is the guest's mixer idle (Standby: yes, nothing is playing) or stuck in the audio HAL (write)?
+            + "  dumpsys media.audio_flinger 2>/dev/null | grep -E 'Standby|Total writes|Blocked writes|Num tracks|active tracks|underrun' | head -8 | while read -r l; do echo \"awperf: af $l\" > /dev/kmsg; done\n"
+            + "  debuggerd -b $(pidof audioserver) 2>/dev/null | grep -A3 AudioOut | head -8 | while read -r l; do echo \"awperf: afbt $l\" > /dev/kmsg; done\n"
             + "done\n";
 
     static final String RC_ADDITION = "\n# --- androidware ---\n"

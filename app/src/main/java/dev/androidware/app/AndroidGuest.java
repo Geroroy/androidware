@@ -283,15 +283,16 @@ public final class AndroidGuest {
     }
 
     /**
-     * Engine setting "fast process switching" (default on): the engine keeps the software TLB of the
-     * last guest address spaces instead of flushing it on every switch between two guest processes
-     * (engine patch 0025, docs/optimization.md). Off = the engine's previous behaviour, as a fallback
-     * should a guest misbehave; passed to the engine as AW_TLB_CTX=0 by EngineService.
+     * Engine setting "fast process switching": the engine keeps the software TLB of the last guest
+     * address spaces instead of flushing it on every switch between two guest processes (engine patch
+     * 0025, docs/optimization.md). Passed to the engine as AW_TLB_CTX=0 when off (EngineService).
+     * Default OFF since 0.0.19: on the device the game had no sound with 0.0.17/0.0.18 (first builds
+     * with it) and the cause is not known yet; off rules this part out.
      */
-    private static File noCtxFile(Context ctx) { return new File(dir(ctx), "noctx.txt"); }
-    public static boolean fastSwitch(Context ctx) { return !noCtxFile(ctx).isFile(); }
+    private static File ctxOnFile(Context ctx) { return new File(dir(ctx), "ctx-on.txt"); }
+    public static boolean fastSwitch(Context ctx) { return ctxOnFile(ctx).isFile(); }
     public static void setFastSwitch(Context ctx, boolean on) throws IOException {
-        if (on) noCtxFile(ctx).delete(); else { try (OutputStream o = new FileOutputStream(noCtxFile(ctx))) { o.write('1'); } }
+        if (on) { try (OutputStream o = new FileOutputStream(ctxOnFile(ctx))) { o.write('1'); } } else ctxOnFile(ctx).delete();
     }
 
     public static int[] displaySize(Context ctx) { return DISPLAY_MODES[displayMode(ctx)]; }
