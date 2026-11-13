@@ -126,6 +126,12 @@ SELF="$ROOT/app/src/main/assets/selftest"; mkdir -p "$SELF"
 # Native 64-bit baseline for the self-test, shipped as an executable named like a library (exec from nativeLibraryDir)
 "$TC/bin/aarch64-linux-android${API}-clang" -O2 -fPIE -pie -Wl,-z,max-page-size=16384 -o "$OUTLIB/libbench-arm64.so" "$ROOT/experiments/pc-tcg-aarch32/bench.c" -lm
 "$TC/bin/llvm-strip" "$OUTLIB/libbench-arm64.so"
+# Direct-mode prototype (docs/direct-mode.md): GL workload as a 32-bit guest program (thunks, patch 0026) and natively
+"$TC/bin/armv7a-linux-androideabi${API}-clang" -O2 -static -o "$SELF/glbench32" "$ROOT/experiments/direct-mode/glbench.c" "$ROOT/experiments/direct-mode/stubs.S" -lm
+"$TC/bin/llvm-strip" "$SELF/glbench32"
+"$TC/bin/aarch64-linux-android${API}-clang" -O2 -fPIE -pie -Wl,-z,max-page-size=16384 -o "$OUTLIB/libglbench-arm64.so" \
+  "$ROOT/experiments/direct-mode/glbench.c" "$ROOT/experiments/direct-mode/egl_native.c" -lEGL -lGLESv2 -lm
+"$TC/bin/llvm-strip" "$OUTLIB/libglbench-arm64.so"
 # The VNC server needs keymaps/en-us from the data dir (-L); it is plain data from the QEMU source tree.
 mkdir -p "$ROOT/app/src/main/assets/qemu-share/keymaps" && cp "$SRC/qemu/pc-bios/keymaps/en-us" "$ROOT/app/src/main/assets/qemu-share/keymaps/"
 # Host GLES renderer (GLES 2.0 path): engine/emugl -> libawgl.so

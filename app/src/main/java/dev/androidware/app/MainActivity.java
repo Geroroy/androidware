@@ -98,7 +98,7 @@ public class MainActivity extends Activity implements EngineService.LogListener,
             startActivityForResult(i, REQ_EXPORT);
         });
 
-        log("Andronia 0.0.19-m1; profile=" + profile.name + " kernel=" + profile.kernel + " initrd=" + profile.initrd + " disk=" + profile.disk);
+        log("Andronia 0.0.20-m1; profile=" + profile.name + " kernel=" + profile.kernel + " initrd=" + profile.initrd + " disk=" + profile.disk);
         Intent svc = new Intent(this, EngineService.class);
         bindService(svc, conn, Context.BIND_AUTO_CREATE);
     }

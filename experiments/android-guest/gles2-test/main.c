@@ -7,6 +7,7 @@
 #include <math.h>
 #include <stdint.h>
 #include <time.h>
+#include "../../direct-mode/glbench.h"   // shared workload: the same frames as experiments/direct-mode/glbench.c
 #define LOG(...) __android_log_print(ANDROID_LOG_INFO, "gles2test", __VA_ARGS__)
 static EGLDisplay dpy = EGL_NO_DISPLAY; static EGLSurface surf; static EGLContext ctx;
 static int32_t W, H; static float cx = 0, cy = 0; static GLuint prog; static GLint uAngle, uCenter;
@@ -21,6 +22,7 @@ static GLuint shader(GLenum type, const char *src) {
     if (!ok) { char log[512]; glGetShaderInfoLog(s, sizeof log, 0, log); LOG("shader compile failed: %s", log); }
     return s;
 }
+static void run_glbench(void);
 static void init_gl(struct android_app *app) {
     const EGLint attr[] = {EGL_SURFACE_TYPE, EGL_WINDOW_BIT, EGL_RENDERABLE_TYPE, EGL_OPENGL_ES2_BIT, EGL_RED_SIZE, 8, EGL_GREEN_SIZE, 8, EGL_BLUE_SIZE, 8, EGL_NONE};
     const EGLint cattr[] = {EGL_CONTEXT_CLIENT_VERSION, 2, EGL_NONE};
@@ -43,6 +45,18 @@ static void init_gl(struct android_app *app) {
     GLuint tex; glGenTextures(1, &tex); glBindTexture(GL_TEXTURE_2D, tex);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR); glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 64, 64, 0, GL_RGBA, GL_UNSIGNED_BYTE, pix);
+    run_glbench();
+}
+// Same measurement as experiments/direct-mode/glbench.c, but through the guest's GL (goldfish pipe -> host renderer).
+static void run_glbench(void) {
+    int ok = glb_init(); float acc = 0;
+    for (int f = 0; f < 20; f++) { acc += glb_frame(f); eglSwapBuffers(dpy, surf); }
+    double t0 = now();
+    for (int f = 0; f < GLB_FRAMES; f++) { acc += glb_frame(f); eglSwapBuffers(dpy, surf); }
+    glFinish();
+    double t1 = now();
+    LOG("glbench: link=%d draws/frame=%d ms_per_frame=%.3f (%d frames, chk %.1f)", ok, GLB_NDRAW, (t1 - t0) * 1e3 / GLB_FRAMES, GLB_FRAMES, acc);
+    glUseProgram(prog);
 }
 static void draw(int frame) {
     static const GLfloat v[] = {-1, -1, 1, -1, -1, 1, 1, 1}, t[] = {0, 1, 1, 1, 0, 0, 1, 0};

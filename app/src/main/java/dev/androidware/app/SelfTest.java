@@ -42,6 +42,18 @@ public final class SelfTest {
             } else {
                 sb.append("qemu-arm not bundled in this build; skipping 32-bit user-mode test\n");
             }
+            // Direct-mode prototype (docs/direct-mode.md): a 32-bit ARM program under qemu-arm whose GL calls are
+            // host thunks straight into this device's GLES driver, and the same program built natively.
+            File glNat = new File(lib, "libglbench-arm64.so");
+            if (qarm.exists()) {
+                File g32 = extract(ctx, "selftest/glbench32", new File(dir, "glbench32"));
+                sb.append("-- direct mode: 32-bit ARM GL workload under qemu-arm, GL calls -> host GPU driver --\n");
+                sb.append(exec(dir, 300, qarm.getAbsolutePath(), g32.getAbsolutePath()));
+            }
+            if (glNat.exists()) {
+                sb.append("-- same GL workload, native 64-bit (baseline) --\n");
+                sb.append(exec(dir, 120, glNat.getAbsolutePath()));
+            }
             File nat = new File(lib, "libbench-arm64.so");
             if (nat.exists()) {
                 sb.append("-- same bench, native 64-bit on this CPU (baseline) --\n");

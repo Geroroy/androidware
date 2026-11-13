@@ -1,0 +1,250 @@
+androidware: direct-mode prototype - host thunks in Arm user-mode emulation (qemu-arm)
+
+A guest stub ("mov ip, #id; svc 0x9f0100; bx lr") reaches cpu_loop() as the
+private syscall 0xf0100 and is dispatched to aw_thunk_call(), which calls the
+host's own EGL / OpenGL ES with the guest's AAPCS soft-float arguments; guest
+pointers become host pointers, so vertex arrays and textures are not copied.
+Function list = what experiments/direct-mode/glbench.c uses. See
+docs/direct-mode.md.
+
+--- a/linux-user/arm/cpu_loop.c
++++ b/linux-user/arm/cpu_loop.c
+@@ -28,6 +28,7 @@
+ #include "exec/mmap-lock.h"
+ #include "user/page-protection.h"
+ #include "target/arm/syndrome.h"
++#include "aw-thunk.h"
+ 
+ #define get_user_code_u32(x, gaddr, env)                \
+     ({ abi_long __r = get_user_u32((x), (gaddr));       \
+@@ -348,6 +349,10 @@
+                         /* nop */
+                         env->regs[0] = 0;
+                         break;
++                    case AW_THUNK_SYSCALL:
++                        /* androidware direct mode: call into the host (aw-thunk.c) */
++                        env->regs[0] = aw_thunk_call(env);
++                        break;
+                     case ARM_NR_set_tls:
+                         cpu_set_tls(env, env->regs[0]);
+                         env->regs[0] = 0;
+--- a/linux-user/arm/meson.build
++++ b/linux-user/arm/meson.build
+@@ -24,3 +24,6 @@
+ linux_user_ss.add(when: 'TARGET_ARM', if_true: [
+     vdso_be8_inc, vdso_be32_inc, vdso_le_inc
+ ])
++
++# androidware direct-mode prototype (docs/direct-mode.md)
++linux_user_ss.add(when: 'TARGET_ARM', if_true: files('aw-thunk.c'))
+--- /dev/null
++++ b/linux-user/arm/aw-thunk.c
+@@ -0,0 +1,188 @@
++/*
++ * androidware "direct mode" prototype: host thunks for a 32-bit Arm guest in
++ * user-mode emulation.
++ *
++ * The guest calls a stub ("mov ip, #id; svc 0x9f0100; bx lr", Arm state). The
++ * SVC arrives in cpu_loop() as the private syscall 0xf0100 and is routed
++ * here: the arguments are taken from r0-r3 and the guest stack exactly as the
++ * AAPCS soft-float calling convention (Android armeabi/armeabi-v7a) passed
++ * them, guest pointers are turned into host pointers, and the host's own
++ * (64-bit, hardware) EGL / OpenGL ES library is called directly. Vertex
++ * arrays, textures and uniforms are read by the host GL straight from guest
++ * memory; nothing is serialised or copied.
++ *
++ * This file is the measurement vehicle for docs/direct-mode.md; the function
++ * list is what experiments/direct-mode/glbench.c needs, not all of GLES 2.0.
++ */
++#include "qemu/osdep.h"
++#include "qemu.h"
++#include "user-internals.h"
++#include "user/guest-host.h"
++#include <dlfcn.h>
++#include "aw-thunk.h"
++
++typedef void *(*fn_t)(void);
++
++static void *egl_lib, *gl_lib;
++static void *egl_dpy, *egl_surf, *egl_ctx;
++
++static fn_t sym(void *lib, const char *name)
++{
++    fn_t f = (fn_t)dlsym(lib, name);
++    if (!f) {
++        fprintf(stderr, "aw-thunk: missing host symbol %s\n", name);
++        exit(1);
++    }
++    return f;
++}
++#define EGL(ret, name, ...) ((ret (*)(__VA_ARGS__))sym(egl_lib, name))
++#define GLF(ret, name, ...) ({ static ret (*f_)(__VA_ARGS__); if (!f_) f_ = (ret (*)(__VA_ARGS__))sym(gl_lib, name); f_; })
++
++static void *P(uint32_t guest_ptr)
++{
++    return guest_ptr ? g2h_untagged(guest_ptr) : NULL;
++}
++
++static float F(uint32_t bits)
++{
++    float f;
++    memcpy(&f, &bits, 4);
++    return f;
++}
++
++/* Creates a GLES 2.0 context on an off-screen w x h surface and makes it current on this thread. */
++static uint32_t aw_egl_init(int w, int h)
++{
++    static const int cfg_attr[] = { 0x3033 /*SURFACE_TYPE*/, 0x0001 /*PBUFFER*/, 0x3040 /*RENDERABLE*/, 0x0004 /*ES2*/,
++                                    0x3024, 8, 0x3023, 8, 0x3022, 8, 0x3025 /*DEPTH*/, 16, 0x3038 };
++    static const int ctx_attr[] = { 0x3098 /*CONTEXT_CLIENT_VERSION*/, 2, 0x3038 };
++    int pb_attr[] = { 0x3057 /*WIDTH*/, w, 0x3056 /*HEIGHT*/, h, 0x3038 };
++    void *cfg = NULL;
++    int n = 0;
++
++    egl_lib = dlopen(getenv("AW_EGL_LIB") ?: "libEGL.so.1", RTLD_NOW | RTLD_GLOBAL);
++    egl_lib = egl_lib ?: dlopen("libEGL.so", RTLD_NOW | RTLD_GLOBAL);
++    gl_lib = dlopen(getenv("AW_GLES_LIB") ?: "libGLESv2.so.2", RTLD_NOW | RTLD_GLOBAL);
++    gl_lib = gl_lib ?: dlopen("libGLESv2.so", RTLD_NOW | RTLD_GLOBAL);
++    if (!egl_lib || !gl_lib) {
++        fprintf(stderr, "aw-thunk: cannot load host EGL/GLES: %s\n", dlerror());
++        return 0;
++    }
++    egl_dpy = EGL(void *, "eglGetDisplay", void *)(NULL);
++    if (!egl_dpy || !EGL(int, "eglInitialize", void *, int *, int *)(egl_dpy, NULL, NULL) ||
++        !EGL(int, "eglChooseConfig", void *, const int *, void **, int, int *)(egl_dpy, cfg_attr, &cfg, 1, &n) || n < 1) {
++        fprintf(stderr, "aw-thunk: host EGL init failed\n");
++        return 0;
++    }
++    egl_surf = EGL(void *, "eglCreatePbufferSurface", void *, void *, const int *)(egl_dpy, cfg, pb_attr);
++    egl_ctx = EGL(void *, "eglCreateContext", void *, void *, void *, const int *)(egl_dpy, cfg, NULL, ctx_attr);
++    if (!egl_surf || !egl_ctx ||
++        !EGL(int, "eglMakeCurrent", void *, void *, void *, void *)(egl_dpy, egl_surf, egl_surf, egl_ctx)) {
++        fprintf(stderr, "aw-thunk: host EGL context failed\n");
++        return 0;
++    }
++    fprintf(stderr, "aw-thunk: host GL: %s / %s\n",
++            (const char *)GLF(const void *, "glGetString", unsigned)(0x1F01),
++            (const char *)GLF(const void *, "glGetString", unsigned)(0x1F02));
++    return 1;
++}
++
++uint32_t aw_thunk_call(CPUARMState *env)
++{
++    uint32_t id = env->regs[12];
++    uint32_t a[8];
++    uint32_t *stack = g2h_untagged(env->regs[13]);
++
++    for (int i = 0; i < 4; i++) {
++        a[i] = env->regs[i];
++        a[4 + i] = stack[i];
++    }
++
++    switch (id) {
++    case AW_egl_init:
++        return aw_egl_init(a[0], a[1]);
++    case AW_egl_swap:
++        return EGL(int, "eglSwapBuffers", void *, void *)(egl_dpy, egl_surf);
++    case AW_glViewport:
++        GLF(void, "glViewport", int, int, int, int)(a[0], a[1], a[2], a[3]);
++        return 0;
++    case AW_glClearColor:
++        GLF(void, "glClearColor", float, float, float, float)(F(a[0]), F(a[1]), F(a[2]), F(a[3]));
++        return 0;
++    case AW_glClear:
++        GLF(void, "glClear", unsigned)(a[0]);
++        return 0;
++    case AW_glEnable:
++        GLF(void, "glEnable", unsigned)(a[0]);
++        return 0;
++    case AW_glCreateShader:
++        return GLF(unsigned, "glCreateShader", unsigned)(a[0]);
++    case AW_glShaderSource: {
++        /* (shader, count, const char *const *strings, const int *lengths): an array of 32-bit guest pointers */
++        int count = a[1];
++        uint32_t *gstr = P(a[2]);
++        g_autofree const char **hstr = g_new(const char *, count);
++        for (int i = 0; i < count; i++) {
++            hstr[i] = P(gstr[i]);
++        }
++        GLF(void, "glShaderSource", unsigned, int, const char **, const int *)(a[0], count, hstr, P(a[3]));
++        return 0;
++    }
++    case AW_glCompileShader:
++        GLF(void, "glCompileShader", unsigned)(a[0]);
++        return 0;
++    case AW_glGetShaderiv:
++        GLF(void, "glGetShaderiv", unsigned, unsigned, int *)(a[0], a[1], P(a[2]));
++        return 0;
++    case AW_glGetShaderInfoLog:
++        GLF(void, "glGetShaderInfoLog", unsigned, int, int *, char *)(a[0], a[1], P(a[2]), P(a[3]));
++        return 0;
++    case AW_glCreateProgram:
++        return GLF(unsigned, "glCreateProgram", void)();
++    case AW_glAttachShader:
++        GLF(void, "glAttachShader", unsigned, unsigned)(a[0], a[1]);
++        return 0;
++    case AW_glBindAttribLocation:
++        GLF(void, "glBindAttribLocation", unsigned, unsigned, const char *)(a[0], a[1], P(a[2]));
++        return 0;
++    case AW_glLinkProgram:
++        GLF(void, "glLinkProgram", unsigned)(a[0]);
++        return 0;
++    case AW_glGetProgramiv:
++        GLF(void, "glGetProgramiv", unsigned, unsigned, int *)(a[0], a[1], P(a[2]));
++        return 0;
++    case AW_glUseProgram:
++        GLF(void, "glUseProgram", unsigned)(a[0]);
++        return 0;
++    case AW_glGetUniformLocation:
++        return GLF(int, "glGetUniformLocation", unsigned, const char *)(a[0], P(a[1]));
++    case AW_glEnableVertexAttribArray:
++        GLF(void, "glEnableVertexAttribArray", unsigned)(a[0]);
++        return 0;
++    case AW_glVertexAttribPointer:
++        /* client-side array: the host GL reads guest memory in place */
++        GLF(void, "glVertexAttribPointer", unsigned, int, unsigned, unsigned char, int, const void *)
++            (a[0], a[1], a[2], a[3], a[4], P(a[5]));
++        return 0;
++    case AW_glUniformMatrix4fv:
++        GLF(void, "glUniformMatrix4fv", int, int, unsigned char, const float *)(a[0], a[1], a[2], P(a[3]));
++        return 0;
++    case AW_glUniform1f:
++        GLF(void, "glUniform1f", int, float)(a[0], F(a[1]));
++        return 0;
++    case AW_glDrawArrays:
++        GLF(void, "glDrawArrays", unsigned, int, int)(a[0], a[1], a[2]);
++        return 0;
++    case AW_glFinish:
++        GLF(void, "glFinish", void)();
++        return 0;
++    case AW_glGetError:
++        return GLF(unsigned, "glGetError", void)();
++    case AW_glReadPixels:
++        GLF(void, "glReadPixels", int, int, int, int, unsigned, unsigned, void *)(a[0], a[1], a[2], a[3], a[4], a[5], P(a[6]));
++        return 0;
++    default:
++        fprintf(stderr, "aw-thunk: unknown thunk id %u\n", id);
++        return 0;
++    }
++}
+--- /dev/null
++++ b/linux-user/arm/aw-thunk.h
+@@ -0,0 +1,17 @@
++/* androidware direct-mode prototype: thunk ids shared by the host (aw-thunk.c) and the guest stubs. */
++#ifndef AW_THUNK_H
++#define AW_THUNK_H
++#define AW_THUNK_SYSCALL 0xf0100        /* private Arm syscall number (ARM_NR_BASE + 0x100) */
++#define AW_THUNK_SVC_IMM 0x9f0100       /* SVC immediate that yields it (OABI encoding, r7 untouched) */
++enum {
++    AW_egl_init = 1, AW_egl_swap,
++    AW_glViewport, AW_glClearColor, AW_glClear, AW_glEnable,
++    AW_glCreateShader, AW_glShaderSource, AW_glCompileShader, AW_glGetShaderiv, AW_glGetShaderInfoLog,
++    AW_glCreateProgram, AW_glAttachShader, AW_glBindAttribLocation, AW_glLinkProgram, AW_glGetProgramiv,
++    AW_glUseProgram, AW_glGetUniformLocation, AW_glEnableVertexAttribArray, AW_glVertexAttribPointer,
++    AW_glUniformMatrix4fv, AW_glUniform1f, AW_glDrawArrays, AW_glFinish, AW_glGetError, AW_glReadPixels,
++};
++#ifdef QEMU_OSDEP_H
++uint32_t aw_thunk_call(CPUARMState *env);
++#endif
++#endif
